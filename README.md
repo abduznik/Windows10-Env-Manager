@@ -89,7 +89,7 @@ pip install pyinstaller
 
 2. Run the `build.bat` script:
 
-```cmd
+cmd
 
 build.bat
 
