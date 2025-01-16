@@ -7,7 +7,7 @@ pyinstaller --noconfirm --onedir --windowed ^
 --add-data "%CURRENT_DIR%\assets;assets/" ^
 --add-data "%CURRENT_DIR%\cmd_path.py;." ^
 --add-data "%CURRENT_DIR%\gui_command.py;." ^
-"%CURRENT_DIR%\gui.py"
+"%CURRENT_DIR%\main.py"
 
 echo Build complete.
 pause
