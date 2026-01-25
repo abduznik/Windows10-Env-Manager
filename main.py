@@ -3,9 +3,8 @@ import cmd_path
 from tkinter import Tk, Canvas, Button, PhotoImage
 import ctypes
 from gui_command import *
+from utils import ASSETS_PATH
 
-OUTPUT_PATH = Path(__file__).parent
-ASSETS_PATH = OUTPUT_PATH / Path(r"C:\Users\Yan\Documents\Path_editor\build\assets\frame0")
 
 bypass = True
 selected_path = ""

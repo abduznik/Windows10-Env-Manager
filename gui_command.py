@@ -3,9 +3,7 @@ import os
 from pathlib import Path
 import cmd_path
 from tkinter.filedialog import askdirectory
-
-OUTPUT_PATH = Path(__file__).parent
-ASSETS_PATH = OUTPUT_PATH / Path(r"C:\Users\Yan\Documents\Path_editor\build\assets\frame0")
+from utils import ASSETS_PATH
 
 def relative_to_assets(path: str) -> Path:
     return ASSETS_PATH / Path(path)
