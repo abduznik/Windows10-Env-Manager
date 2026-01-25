@@ -61,7 +61,53 @@ This library is at the core of the app, handling all operations with efficiency 
 
 ---
 
-  
+
+
+## Development Setup
+
+Follow these steps to set up the project locally for development.
+
+### Requirements
+
+- Windows 10
+- Python 3.9 or later
+- Git
+- pip
+
+### Setup Instructions
+
+1. Clone the repository:
+
+```bash
+git clone https://github.com/abduznik/Windows10-Env-Manager.git
+
+cd Windows10-Env-Manager
+```
+
+2. Create a virtual environment (Optional but recommended):
+
+```bash
+python -m venv venv
+
+venv\Scripts\activate
+```
+
+3. Run the application:
+
+```bash
+python main.py
+```
+
+
+⚠️ Note:
+
+- This application must be run as **Administrator** in order to modify system environment variables.
+
+- Image assets are loaded from the `assets/` directory, so the app must be run from the project root.
+
+- A `path_list.txt` file is created at runtime to store PATH values.
+
+
 
 ## Build the App
 
