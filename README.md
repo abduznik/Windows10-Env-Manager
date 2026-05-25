@@ -81,7 +81,7 @@ and writing `os.environ` and the user's shell configuration file
 
 | Main window | Path editor popup |
 |-------------|-------------------|
-| ![Main window](preview.png) | *(Add a screenshot of the editor popup)* |
+| ![Main window](preview.png) | ![Editor popup](preview_popup.png) |
 
 ---
 
