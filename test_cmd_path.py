@@ -307,6 +307,10 @@ class UnixMixin:
         monkeypatch.setattr(cmd_path, "_IS_WINDOWS", False)
 
 
+@pytest.mark.skipif(
+    not hasattr(os, "geteuid"),
+    reason="os.geteuid() not available on Windows",
+)
 class TestCheckAdminUnix(UnixMixin):
     """check_admin when running on Unix / macOS."""
 
