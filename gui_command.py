@@ -26,6 +26,14 @@ def create_new_dir() -> None:
         messagebox.showinfo("No Folder Selected", "Please select a folder to add to the PATH.")
         return
 
+    # Ask for confirmation before modifying the system PATH
+    if not messagebox.askyesno(
+        "Confirm PATH Modification",
+        f"Are you sure you want to add the following directory to the "
+        f"system PATH?\n\n{selected_directory}",
+    ):
+        return
+
     try:
         cmd_path.add_to_path(selected_directory)
         messagebox.showinfo(
@@ -36,6 +44,12 @@ def create_new_dir() -> None:
     except Exception as e:
         messagebox.showerror("Error", str(e))
         print(f"Error adding directory to PATH: {e}")
+
+    # Backup before modification
+    try:
+        cmd_path.backup_path()
+    except Exception as backup_err:
+        print(f"Warning: failed to backup PATH: {backup_err}")
 
 
 def open_path_editor() -> None:
@@ -109,6 +123,15 @@ def open_path_editor() -> None:
 
             # Join with platform path separator (no trailing separator)
             updated_path_content: str = _SEP.join(paths)
+
+            # Confirm the modification with the user
+            if not messagebox.askyesno(
+                "Confirm PATH Modification",
+                f"Are you sure you want to update the system PATH?\n\n"
+                f"This will replace:\n{state.selected_path}\n\n"
+                f"With:\n{new_path}",
+            ):
+                return
 
             # Update the system PATH via cmd_path
             cmd_path.set_path(updated_path_content)

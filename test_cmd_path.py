@@ -114,10 +114,13 @@ class TestSetPath:
     def test_sets_path_successfully(self, mock_run: MagicMock) -> None:
         mock_process = MagicMock()
         mock_process.returncode = 0
+        mock_process.stdout = ""
+        mock_process.stderr = ""
         mock_run.return_value = mock_process
 
         cmd_path.set_path("C:\\MyApp")
-        mock_run.assert_called_once()
+        # subprocess.run is called by backup_path->get_path AND set_path
+        assert mock_run.call_count >= 2
 
     @patch("subprocess.run")
     def test_raises_on_failure(self, mock_run: MagicMock) -> None:
@@ -133,13 +136,16 @@ class TestSetPath:
     def test_escapes_double_quotes(self, mock_run: MagicMock) -> None:
         mock_process = MagicMock()
         mock_process.returncode = 0
+        mock_process.stdout = ""
+        mock_process.stderr = ""
         mock_run.return_value = mock_process
 
         path_with_quotes = 'C:\\My"App'
         cmd_path.set_path(path_with_quotes)
 
-        # Verify the escaped version is in the command
-        command_str = " ".join(mock_run.call_args[0][0])
+        # Last subprocess call should be the set_path PowerShell command
+        last_call = mock_run.call_args_list[-1]
+        command_str = " ".join(last_call[0][0])
         assert '\\\\"' in command_str or 'My\\"App' in command_str
 
 
@@ -177,10 +183,13 @@ class TestClearPath:
     def test_clears_path_successfully(self, mock_run: MagicMock) -> None:
         mock_process = MagicMock()
         mock_process.returncode = 0
+        mock_process.stdout = ""
+        mock_process.stderr = ""
         mock_run.return_value = mock_process
 
         cmd_path.clear_path(confirm=True)
-        mock_run.assert_called_once()
+        # subprocess.run is called by backup_path->get_path AND clear_path
+        assert mock_run.call_count >= 2
 
     @patch("subprocess.run")
     def test_raises_on_failure(self, mock_run: MagicMock) -> None:
@@ -305,11 +314,13 @@ class TestSetPathProtection:
     def test_accepts_valid_path(self, mock_run: MagicMock) -> None:
         mock_process = MagicMock()
         mock_process.returncode = 0
+        mock_process.stdout = ""
+        mock_process.stderr = ""
         mock_run.return_value = mock_process
 
         # Should not raise
         cmd_path.set_path("C:\\Windows")
-        mock_run.assert_called_once()
+        assert mock_run.call_count >= 2
 
 
 # ---------------------------------------------------------------------------
@@ -336,10 +347,12 @@ class TestClearPathProtection:
     def test_accepts_with_confirm_true(self, mock_run: MagicMock) -> None:
         mock_process = MagicMock()
         mock_process.returncode = 0
+        mock_process.stdout = ""
+        mock_process.stderr = ""
         mock_run.return_value = mock_process
 
         cmd_path.clear_path(confirm=True)
-        mock_run.assert_called_once()
+        assert mock_run.call_count >= 2
 
 
 # ---------------------------------------------------------------------------
@@ -406,6 +419,215 @@ class TestSavePathToFileDefault:
         cmd_path.save_path_to_file("C:\\Test")
         assert defaults.exists()
         assert defaults.read_text(encoding="utf-8") == "C:\\Test"
+
+
+# ---------------------------------------------------------------------------
+# Backup / Restore
+# ---------------------------------------------------------------------------
+
+
+class TestBackupPath:
+    """backup_path and restore_path on Windows."""
+
+    @patch("subprocess.run")
+    def test_backup_saves_current_path_to_file(self, mock_run: MagicMock, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.chdir(tmp_path)
+        mock_process = MagicMock()
+        mock_process.returncode = 0
+        mock_process.stdout = "C:\\Windows;C:\\Program Files\n"
+        mock_process.stderr = ""
+        mock_run.return_value = mock_process
+
+        result = cmd_path.backup_path()
+
+        assert result == "C:\\Windows;C:\\Program Files"
+        backup_file = tmp_path / "path_backup.txt"
+        assert backup_file.exists()
+
+        import json
+        data = json.loads(backup_file.read_text(encoding="utf-8"))
+        assert data["path"] == "C:\\Windows;C:\\Program Files"
+        assert data["scope"] == "Machine"
+        assert "timestamp" in data
+
+    @patch("subprocess.run")
+    def test_backup_returns_current_path(self, mock_run: MagicMock) -> None:
+        mock_process = MagicMock()
+        mock_process.returncode = 0
+        mock_process.stdout = "C:\\MyPath\n"
+        mock_process.stderr = ""
+        mock_run.return_value = mock_process
+
+        result = cmd_path.backup_path()
+        assert result == "C:\\MyPath"
+
+    def test_restore_raises_when_no_backup(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.chdir(tmp_path)
+        with pytest.raises(FileNotFoundError, match="No PATH backup"):
+            cmd_path.restore_path()
+
+    @patch("subprocess.run")
+    def test_restore_sets_path_from_backup(self, mock_run: MagicMock, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.chdir(tmp_path)
+        # First backup
+        mock_process = MagicMock()
+        mock_process.returncode = 0
+        mock_process.stdout = "C:\\Original\n"
+        mock_process.stderr = ""
+        mock_run.return_value = mock_process
+
+        cmd_path.backup_path()
+
+        # Now restore
+        cmd_path.restore_path()
+
+        # set_path should have been called with the original value
+        last_call = mock_run.call_args
+        command_str = " ".join(last_call[0][0])
+        assert "C:\\Original" in command_str
+
+    @patch("subprocess.run")
+    def test_restore_uses_backup_scope(self, mock_run: MagicMock, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.chdir(tmp_path)
+        # Backup with User scope
+        mock_process = MagicMock()
+        mock_process.returncode = 0
+        mock_process.stdout = "C:\\UserPath\n"
+        mock_process.stderr = ""
+        mock_run.return_value = mock_process
+
+        cmd_path.backup_path(scope="User")
+
+        # Restore with different scope arg (should use backup's "User" scope)
+        cmd_path.restore_path(scope="Machine")
+
+        last_call = mock_run.call_args
+        command_str = " ".join(last_call[0][0])
+        assert "User" in command_str, f"Should use 'User' scope from backup: {command_str}"
+
+    @patch("subprocess.run")
+    def test_auto_backup_before_set_path(self, mock_run: MagicMock, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.chdir(tmp_path)
+        # First call to get_path for the backup
+        mock_process = MagicMock()
+        mock_process.returncode = 0
+        mock_process.stdout = "C:\\BeforeChange\n"
+        mock_process.stderr = ""
+        mock_run.return_value = mock_process
+
+        cmd_path.set_path("C:\\NewPath")
+
+        backup_file = tmp_path / "path_backup.txt"
+        assert backup_file.exists()
+        import json
+        data = json.loads(backup_file.read_text(encoding="utf-8"))
+        assert data["path"] == "C:\\BeforeChange"
+
+    @patch("subprocess.run")
+    def test_auto_backup_before_clear_path(self, mock_run: MagicMock, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.chdir(tmp_path)
+        # First get_path for backup returns original
+        # Second set_path with empty string is for the actual clear
+        mock_process = MagicMock()
+        mock_process.returncode = 0
+        mock_process.stdout = "C:\\ToBeCleared\n"
+        mock_process.stderr = ""
+        mock_run.return_value = mock_process
+
+        cmd_path.clear_path(confirm=True)
+
+        backup_file = tmp_path / "path_backup.txt"
+        assert backup_file.exists()
+        import json
+        data = json.loads(backup_file.read_text(encoding="utf-8"))
+        assert data["path"] == "C:\\ToBeCleared"
+
+
+# ---------------------------------------------------------------------------
+# End-to-end integration tests
+# ---------------------------------------------------------------------------
+
+
+class TestIntegration:
+    """End-to-end flows that combine multiple cmd_path operations."""
+
+    @patch("subprocess.run")
+    def test_backup_modify_restore_cycle(self, mock_run: MagicMock, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Full cycle: backup PATH → modify → restore → original is back."""
+        monkeypatch.chdir(tmp_path)
+
+        # Each call to get_path will return the latest "current" path
+        call_count: int = 0
+        responses: list[str] = [
+            "C:\\OriginalPath;C:\\SecondPath",  # backup_path -> get_path
+            "C:\\OriginalPath;C:\\SecondPath",  # set_path -> backup_path -> get_path
+            "",                                    # clear_path -> backup_path -> get_path
+            "",                                    # clear_path -> set_path
+            "C:\\OriginalPath;C:\\SecondPath",  # restore_path -> set_path -> backup_path -> get_path
+            "C:\\OriginalPath;C:\\SecondPath",  # restore_path -> set_path
+        ]
+
+        def mock_run_side_effect(*args: object, **kwargs: object) -> MagicMock:
+            nonlocal call_count
+            mp = MagicMock()
+            mp.returncode = 0
+            mp.stdout = responses[call_count] + "\n"
+            mp.stderr = ""
+            call_count += 1
+            return mp
+
+        mock_run.side_effect = mock_run_side_effect
+
+        # Step 1: Ensure backup exists (auto-backup in set_path)
+        cmd_path.set_path("C:\\ModifiedPath")
+
+        # Step 2: Restore
+        cmd_path.restore_path()
+
+        # Step 3: Verify the last set_path call restored the original
+        # The last PowerShell command should contain the original path
+        all_calls = [c[0][0] for c in mock_run.call_args_list]
+        last_command = " ".join(all_calls[-1])
+        assert "OriginalPath" in last_command, (
+            f"Expected original path in restore: {last_command}"
+        )
+
+    @patch("subprocess.run")
+    def test_add_path_then_restore(self, mock_run: MagicMock, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Add a path, then restore to revert the change."""
+        monkeypatch.chdir(tmp_path)
+
+        call_count: int = 0
+        responses: list[str] = [
+            "C:\\Original",                      # add_to_path -> get_path
+            "C:\\Original",                      # add_to_path -> backup_path -> get_path (auto-backup in set_path)
+            "",                                    # set_path Powershell command
+            "C:\\Original",                      # restore_path -> set_path -> backup_path -> get_path
+            "C:\\Original",                      # restore_path -> set_path Powershell
+        ]
+
+        def mock_run_side_effect(*args: object, **kwargs: object) -> MagicMock:
+            nonlocal call_count
+            mp = MagicMock()
+            mp.returncode = 0
+            mp.stdout = responses[call_count] + "\n"
+            mp.stderr = ""
+            call_count += 1
+            return mp
+
+        mock_run.side_effect = mock_run_side_effect
+
+        # Add a path (auto-backup preserves original)
+        cmd_path.add_to_path("C:\\AddedPath")
+
+        # Restore
+        cmd_path.restore_path()
+
+        # Verify the last call restored original
+        all_calls = [c[0][0] for c in mock_run.call_args_list]
+        last_command = " ".join(all_calls[-1])
+        assert "C:\\Original" in last_command
+        assert "C:\\AddedPath" not in last_command
 
 
 # ---------------------------------------------------------------------------
@@ -634,3 +856,117 @@ class TestAddToPathProtectionUnix(UnixMixin):
         mock_set_path.assert_called_once()
         args, _ = mock_set_path.call_args
         assert args[0].strip(":"), f"PATH should not be empty: {args[0]!r}"
+
+
+# ---------------------------------------------------------------------------
+# Backup / Restore (Unix)
+# ---------------------------------------------------------------------------
+
+
+class TestBackupPathUnix(UnixMixin):
+    """backup_path and restore_path on Unix / macOS."""
+
+    def test_backup_saves_current_path_to_file(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setenv("PATH", "/usr/bin:/bin:/usr/local/bin")
+
+        result = cmd_path.backup_path()
+
+        assert result == "/usr/bin:/bin:/usr/local/bin"
+        backup_file = tmp_path / "path_backup.txt"
+        assert backup_file.exists()
+
+        import json
+        data = json.loads(backup_file.read_text(encoding="utf-8"))
+        assert data["path"] == "/usr/bin:/bin:/usr/local/bin"
+        assert "timestamp" in data
+
+    def test_backup_returns_current_path(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("PATH", "/opt/myapp/bin")
+        result = cmd_path.backup_path()
+        assert result == "/opt/myapp/bin"
+
+    def test_restore_raises_when_no_backup(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.chdir(tmp_path)
+        with pytest.raises(FileNotFoundError, match="No PATH backup"):
+            cmd_path.restore_path()
+
+    def test_restore_sets_path_from_backup(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setenv("PATH", "/usr/bin:/original/path")
+
+        cmd_path.backup_path()
+
+        # Modify PATH
+        cmd_path.set_path("/tmp/modified")
+
+        # Restore
+        cmd_path.restore_path()
+
+        assert os.environ["PATH"] == "/usr/bin:/original/path"
+
+    def test_auto_backup_before_set_path(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setenv("PATH", "/usr/bin:/before/change")
+
+        cmd_path.set_path("/new/path")
+
+        backup_file = tmp_path / "path_backup.txt"
+        assert backup_file.exists()
+        import json
+        data = json.loads(backup_file.read_text(encoding="utf-8"))
+        assert data["path"] == "/usr/bin:/before/change"
+
+    def test_auto_backup_before_clear_path(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setenv("PATH", "/usr/bin:/tobe/cleared")
+
+        cmd_path.clear_path(confirm=True)
+
+        backup_file = tmp_path / "path_backup.txt"
+        assert backup_file.exists()
+        import json
+        data = json.loads(backup_file.read_text(encoding="utf-8"))
+        assert data["path"] == "/usr/bin:/tobe/cleared"
+
+
+# ---------------------------------------------------------------------------
+# End-to-end integration tests (Unix)
+# ---------------------------------------------------------------------------
+
+
+class TestIntegrationUnix(UnixMixin):
+    """End-to-end flows on Unix / macOS."""
+
+    def test_backup_modify_restore_cycle(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Full cycle: backup PATH -> modify -> restore -> original is back."""
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setenv("PATH", "/usr/bin:/original/path:/bin")
+
+        # Modify PATH
+        cmd_path.set_path("/tmp/modified")
+        assert os.environ["PATH"] == "/tmp/modified"
+
+        # Restore
+        cmd_path.restore_path()
+        assert os.environ["PATH"] == "/usr/bin:/original/path:/bin"
+
+    def test_add_path_then_restore(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Add a path, then restore to revert the change."""
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setenv("PATH", "/usr/bin:/bin")
+
+        # add_to_path calls set_path which auto-backups
+        cmd_path.add_to_path("/opt/newapp")
+
+        # Verify new path was added
+        assert "/opt/newapp" in os.environ["PATH"]
+
+        # Restore to revert
+        cmd_path.restore_path()
+
+        # Verify original is back and new path is removed
+        assert os.environ["PATH"] == "/usr/bin:/bin"
+        assert "/opt/newapp" not in os.environ["PATH"]
+
+

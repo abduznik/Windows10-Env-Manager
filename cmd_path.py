@@ -9,12 +9,21 @@ Unix / macOS
     configuration file (``~/.zshrc``, ``~/.bashrc``, or ``~/.profile``).
     Changes take effect in new terminal sessions; the current session
     is updated via ``os.environ`` immediately.
+
+Backup / Restore
+    Every modification (``set_path``, ``clear_path``) automatically backs
+    up the current PATH first.  Use ``restore_path()`` to roll back.
 """
 
+import json
 import os
 import subprocess
 import sys
+from datetime import datetime
 from pathlib import Path
+
+
+_BACKUP_FILE = "path_backup.txt"
 
 
 # ---------------------------------------------------------------------------
@@ -61,6 +70,84 @@ def _update_shell_config(new_path: str) -> None:
         rc.write_text("".join(filtered), encoding="utf-8")
     else:
         rc.write_text(export_line, encoding="utf-8")
+
+
+# ---------------------------------------------------------------------------
+# Backup / Restore
+# ---------------------------------------------------------------------------
+
+
+def _backup_file_path() -> Path:
+    """Return the ``Path`` to the backup file in the current directory."""
+    return Path(_BACKUP_FILE)
+
+
+def backup_path(scope: str = "Machine") -> str:
+    """Save the current ``PATH`` to a backup file and return its value.
+
+    The backup is stored as JSON with the scope, path value, and a
+    timestamp so ``restore_path()`` can restore it later.
+
+    Args:
+        scope: ``"Machine"`` or ``"User"`` (Windows only; ignored on Unix).
+
+    Returns:
+        The current PATH string that was backed up.
+    """
+    current: str = get_path(scope)
+    backup: dict[str, str] = {
+        "scope": scope,
+        "path": current,
+        "timestamp": datetime.now().isoformat(),
+    }
+    _backup_file_path().write_text(
+        json.dumps(backup, indent=2), encoding="utf-8"
+    )
+    return current
+
+
+def restore_path(scope: str = "Machine") -> None:
+    """Restore ``PATH`` from the most recent backup.
+
+    Reads the backup file created by the most recent ``backup_path()``,
+    ``set_path()``, or ``clear_path()`` call, and writes it back to the
+    environment via ``set_path()``.
+
+    Args:
+        scope: Ignored; the scope from the backup file is used instead.
+
+    Raises:
+        FileNotFoundError: If no backup file exists.
+        ValueError: If the backup data is malformed.
+    """
+    backup_path_obj: Path = _backup_file_path()
+    if not backup_path_obj.exists():
+        raise FileNotFoundError(
+            f"No PATH backup found at '{_BACKUP_FILE}'. "
+            "Run backup_path() first."
+        )
+
+    try:
+        backup: dict[str, str] = json.loads(
+            backup_path_obj.read_text(encoding="utf-8")
+        )
+    except json.JSONDecodeError as exc:
+        raise ValueError(
+            f"Backup file '{_BACKUP_FILE}' is corrupted: {exc}"
+        ) from exc
+
+    if "path" not in backup:
+        raise ValueError(
+            f"Backup file '{_BACKUP_FILE}' is missing the 'path' field."
+        )
+
+    saved_path: str = backup["path"]
+    saved_scope: str = backup.get("scope", scope)
+    saved_ts: str = backup.get("timestamp", "unknown")
+
+    print(f"Restoring PATH from backup (saved at {saved_ts})...")
+    set_path(saved_path, saved_scope)
+    print("PATH restored successfully.")
 
 
 # ---------------------------------------------------------------------------
@@ -161,6 +248,12 @@ def set_path(new_path: str, scope: str = "Machine") -> None:
     sep = _get_sep()
     _validate_path_not_empty(new_path, sep)
 
+    # Auto-backup before modifying (non-fatal)
+    try:
+        backup_path(scope)
+    except Exception as backup_err:
+        print(f"Warning: failed to backup PATH: {backup_err}")
+
     if _IS_WINDOWS:
         escaped = new_path.replace('"', '\\"')
         command: list[str] = [
@@ -219,6 +312,12 @@ def clear_path(scope: str = "Machine", *, confirm: bool = False) -> None:
             "Refusing to clear PATH without explicit confirmation. "
             "Pass confirm=True to acknowledge this destructive operation."
         )
+
+    # Auto-backup before clearing (non-fatal)
+    try:
+        backup_path(scope)
+    except Exception as backup_err:
+        print(f"Warning: failed to backup PATH: {backup_err}")
 
     if _IS_WINDOWS:
         command: list[str] = [

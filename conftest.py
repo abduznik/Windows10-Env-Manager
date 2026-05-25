@@ -70,6 +70,10 @@ class _StubMessageBox:
     def showwarning(*args: object, **kwargs: object) -> None:
         pass
 
+    @staticmethod
+    def askyesno(*args: object, **kwargs: object) -> bool:
+        return True
+
 
 class _StubFileDialog:
     """Filedialog stub."""
