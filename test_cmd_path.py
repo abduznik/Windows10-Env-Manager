@@ -719,11 +719,18 @@ class TestIntegration:
 
 
 class UnixMixin:
-    """Mixin that patches ``_IS_WINDOWS`` to ``False`` for Unix code paths."""
+    """Mixin that sets up safe Unix/macOS code paths for testing.
+
+    - Patches ``_IS_WINDOWS`` to ``False``
+    - Redirects ``Path.home()`` to ``tmp_path`` so ``_update_shell_config``
+      **never** touches the real ``~/.zshrc`` / shell config file
+    """
 
     @pytest.fixture(autouse=True)
-    def _patch_unix(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def _patch_unix(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
         monkeypatch.setattr(cmd_path, "_IS_WINDOWS", False)
+        # CRITICAL: prevent writes to the user's actual ~/.zshrc
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
 
 
 @pytest.mark.skipif(
