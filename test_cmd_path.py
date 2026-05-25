@@ -30,6 +30,19 @@ def _patch_windows(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(cmd_path, "_IS_WINDOWS", True)
 
 
+@pytest.fixture(autouse=True)
+def _patch_backup_path(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Redirect the backup file path to the temporary directory.
+
+    ``cmd_path._backup_file_path()`` normally returns a path inside the
+    app data directory (e.g. ``~/Library/Application Support/…``).  In
+    tests we want it to write to the isolated ``tmp_path`` instead.
+    """
+    monkeypatch.setattr(
+        cmd_path, "_backup_file_path", lambda: tmp_path / "path_backup.txt"
+    )
+
+
 # ---------------------------------------------------------------------------
 # check_admin
 # ---------------------------------------------------------------------------
@@ -928,6 +941,171 @@ class TestBackupPathUnix(UnixMixin):
         import json
         data = json.loads(backup_file.read_text(encoding="utf-8"))
         assert data["path"] == "/usr/bin:/tobe/cleared"
+
+
+# ---------------------------------------------------------------------------
+# Dry-run mode tests (Windows)
+# ---------------------------------------------------------------------------
+
+
+class TestDryRun:
+    """dry_run parameter prevents any real modifications."""
+
+    @patch("subprocess.run")
+    def test_set_path_dry_run_does_not_modify(
+        self, mock_run: MagicMock
+    ) -> None:
+        mock_process = MagicMock()
+        mock_process.returncode = 0
+        mock_process.stdout = "C:\\OldPath\n"
+        mock_process.stderr = ""
+        mock_run.return_value = mock_process
+
+        cmd_path.set_path("C:\\NewPath", dry_run=True)
+        # subprocess.run is NOT called for the actual set_path in dry-run mode.
+        # Only the backup_path->get_path call happens if any, but dry_run
+        # short-circuits before that.
+        assert mock_run.call_count == 0, (
+            f"Expected 0 subprocess calls in dry-run, got {mock_run.call_count}"
+        )
+
+    @patch("subprocess.run")
+    def test_clear_path_dry_run_does_not_modify(
+        self, mock_run: MagicMock
+    ) -> None:
+        mock_process = MagicMock()
+        mock_process.returncode = 0
+        mock_process.stdout = "C:\\OldPath\n"
+        mock_process.stderr = ""
+        mock_run.return_value = mock_process
+
+        cmd_path.clear_path(confirm=True, dry_run=True)
+        # get_path() is called for the informational message in dry-run mode
+        assert mock_run.call_count == 1, (
+            f"Expected 1 subprocess call (get_path) in dry-run, "
+            f"got {mock_run.call_count}"
+        )
+
+    def test_backup_path_dry_run_does_not_write_file(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.chdir(tmp_path)
+        backup_file = tmp_path / "path_backup.txt"
+
+        # First back up for real to create a file
+        with patch("subprocess.run") as mock_run:
+            mock_process = MagicMock()
+            mock_process.returncode = 0
+            mock_process.stdout = "C:\\RealPath\n"
+            mock_process.stderr = ""
+            mock_run.return_value = mock_process
+            cmd_path.backup_path()
+
+        assert backup_file.exists()
+        real_mtime = backup_file.stat().st_mtime_ns
+
+        # Now call backup_path again with dry_run=True
+        with patch("subprocess.run") as mock_run:
+            mock_process = MagicMock()
+            mock_process.returncode = 0
+            mock_process.stdout = "C:\\NewPath\n"
+            mock_process.stderr = ""
+            mock_run.return_value = mock_process
+
+            cmd_path.backup_path(dry_run=True)
+
+        # The backup file should NOT have been overwritten
+        assert backup_file.stat().st_mtime_ns == real_mtime, (
+            "dry_run backup should not modify the backup file"
+        )
+
+    @patch("subprocess.run")
+    def test_restore_path_dry_run_does_not_modify(
+        self, mock_run: MagicMock, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.chdir(tmp_path)
+        mock_process = MagicMock()
+        mock_process.returncode = 0
+        mock_process.stdout = "C:\\Original\n"
+        mock_process.stderr = ""
+        mock_run.return_value = mock_process
+
+        # Create a real backup first
+        cmd_path.backup_path()
+
+        # Reset call count
+        mock_run.reset_mock()
+
+        # Now restore with dry_run=True
+        cmd_path.restore_path(dry_run=True)
+
+        # No extra subprocess calls for the restore itself
+        # (get_path might be called for the warning message in clear_path,
+        #  but restore_path doesn't call clear_path)
+        assert mock_run.call_count == 0, (
+            f"Expected 0 subprocess calls in dry-run restore, "
+            f"got {mock_run.call_count}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Dry-run mode tests (Unix)
+# ---------------------------------------------------------------------------
+
+
+class TestDryRunUnix(UnixMixin):
+    """dry_run parameter on Unix / macOS."""
+
+    def test_set_path_dry_run_does_not_modify_os_environ(self) -> None:
+        original = os.environ.get("PATH", "")
+        cmd_path.set_path("/tmp/evil/bin", dry_run=True)
+        assert os.environ.get("PATH", "") == original, (
+            "dry_run set_path should not modify os.environ"
+        )
+
+    def test_clear_path_dry_run_does_not_modify_os_environ(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("PATH", "/usr/bin:/bin")
+        cmd_path.clear_path(confirm=True, dry_run=True)
+        assert os.environ["PATH"] == "/usr/bin:/bin", (
+            "dry_run clear_path should not modify os.environ"
+        )
+
+    def test_backup_path_dry_run_does_not_write_file(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setenv("PATH", "/usr/bin:/first/path")
+        backup_file = tmp_path / "path_backup.txt"
+
+        # Real backup
+        cmd_path.backup_path()
+        assert backup_file.exists()
+        real_mtime = backup_file.stat().st_mtime_ns
+
+        # Dry-run backup
+        monkeypatch.setenv("PATH", "/usr/bin:/second/path")
+        cmd_path.backup_path(dry_run=True)
+
+        # Should NOT have updated the file
+        assert backup_file.stat().st_mtime_ns == real_mtime
+
+    def test_restore_path_dry_run_does_not_modify_os_environ(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setenv("PATH", "/usr/bin:/original")
+
+        # Create backup
+        cmd_path.backup_path()
+
+        # Now os.environ has the backup value; modify to simulate drift
+        monkeypatch.setenv("PATH", "/usr/bin:/modified/after/backup")
+
+        # Restore with dry-run should NOT change os.environ
+        cmd_path.restore_path(dry_run=True)
+        assert os.environ["PATH"] == "/usr/bin:/modified/after/backup"
 
 
 # ---------------------------------------------------------------------------

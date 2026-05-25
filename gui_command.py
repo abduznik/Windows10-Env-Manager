@@ -2,12 +2,14 @@ from tkinter import (
     Canvas, Button, PhotoImage, Frame, Listbox,
     SINGLE, messagebox, Entry, StringVar, Label, Toplevel,
 )
-import os
 from pathlib import Path
 import cmd_path
 from tkinter.filedialog import askdirectory
-from utils import ASSETS_PATH
+from utils import ASSETS_PATH, get_appdata_dir
 from state import state
+
+
+_PATH_LIST_FILE = get_appdata_dir() / "path_list.txt"
 
 
 _SEP = ";"  # internal path-list file delimiter (always ";" across all platforms)
@@ -103,14 +105,12 @@ def open_path_editor() -> None:
             messagebox.showerror("Error", "Path cannot be empty.")
             return
 
-        path_file: str = "path_list.txt"
-
         try:
-            if not os.path.exists(path_file):
-                raise FileNotFoundError(f"{path_file} does not exist.")
+            if not _PATH_LIST_FILE.exists():
+                raise FileNotFoundError(f"{_PATH_LIST_FILE} does not exist.")
 
             # Read the current paths
-            path_content: str = Path(path_file).read_text(encoding="utf-8").strip()
+            path_content: str = _PATH_LIST_FILE.read_text(encoding="utf-8").strip()
 
             # Split into individual paths and remove empties
             paths: list[str] = [p for p in path_content.split(_SEP) if p]
@@ -137,7 +137,7 @@ def open_path_editor() -> None:
             cmd_path.set_path(updated_path_content)
 
             # Write back to the file (add trailing separator for consistency)
-            Path(path_file).write_text(updated_path_content + _SEP, encoding="utf-8")
+            _PATH_LIST_FILE.write_text(updated_path_content + _SEP, encoding="utf-8")
 
             messagebox.showinfo(
                 "Path Updated",
@@ -189,20 +189,19 @@ def create_scrollable_path_list(canvas: Canvas) -> None:
 
     try:
         full_path_string: str = cmd_path.get_path()
-        cmd_path.save_path_to_file(full_path_string)
+        _PATH_LIST_FILE.write_text(full_path_string, encoding="utf-8")
     except Exception as e:
         messagebox.showerror("Error", f"Failed to retrieve PATH: {e}")
         print(f"Error retrieving PATH: {e}")
         return
 
-    path_file: Path = Path("path_list.txt")
-    if not path_file.exists():
+    if not _PATH_LIST_FILE.exists():
         messagebox.showerror("Error", "Could not create path list file.")
         return
 
     try:
         paths: list[str] = [
-            p for p in path_file.read_text(encoding="utf-8").split(_SEP) if p
+            p for p in _PATH_LIST_FILE.read_text(encoding="utf-8").split(_SEP) if p
         ]
     except Exception as e:
         messagebox.showerror("Error", f"Failed to read path list: {e}")

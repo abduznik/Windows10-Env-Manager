@@ -26,6 +26,12 @@ from pathlib import Path
 _BACKUP_FILE = "path_backup.txt"
 
 
+def _appdata_dir() -> Path:
+    """Lazy-import of utils.get_appdata_dir to avoid circular imports."""
+    from utils import get_appdata_dir as _get_appdata_dir
+    return _get_appdata_dir()
+
+
 # ---------------------------------------------------------------------------
 # Platform helpers
 # ---------------------------------------------------------------------------
@@ -78,11 +84,11 @@ def _update_shell_config(new_path: str) -> None:
 
 
 def _backup_file_path() -> Path:
-    """Return the ``Path`` to the backup file in the current directory."""
-    return Path(_BACKUP_FILE)
+    """Return the ``Path`` to the backup file in the app data directory."""
+    return _appdata_dir() / _BACKUP_FILE
 
 
-def backup_path(scope: str = "Machine") -> str:
+def backup_path(scope: str = "Machine", *, dry_run: bool = False) -> str:
     """Save the current ``PATH`` to a backup file and return its value.
 
     The backup is stored as JSON with the scope, path value, and a
@@ -90,11 +96,20 @@ def backup_path(scope: str = "Machine") -> str:
 
     Args:
         scope: ``"Machine"`` or ``"User"`` (Windows only; ignored on Unix).
+        dry_run: If ``True``, print what would be saved without writing.
 
     Returns:
-        The current PATH string that was backed up.
+        The current PATH string that was backed up (or would be backed up
+        in dry-run mode).
     """
     current: str = get_path(scope)
+
+    if dry_run:
+        print(f"[DRY RUN] Would backup current PATH ({scope}):")
+        print(f"[DRY RUN]   {current[:120]}{'...' if len(current) > 120 else ''}")
+        print(f"[DRY RUN]   → {_backup_file_path()}")
+        return current
+
     backup: dict[str, str] = {
         "scope": scope,
         "path": current,
@@ -106,7 +121,7 @@ def backup_path(scope: str = "Machine") -> str:
     return current
 
 
-def restore_path(scope: str = "Machine") -> None:
+def restore_path(scope: str = "Machine", *, dry_run: bool = False) -> None:
     """Restore ``PATH`` from the most recent backup.
 
     Reads the backup file created by the most recent ``backup_path()``,
@@ -115,6 +130,7 @@ def restore_path(scope: str = "Machine") -> None:
 
     Args:
         scope: Ignored; the scope from the backup file is used instead.
+        dry_run: If ``True``, print what would be restored without writing.
 
     Raises:
         FileNotFoundError: If no backup file exists.
@@ -146,6 +162,12 @@ def restore_path(scope: str = "Machine") -> None:
     saved_ts: str = backup.get("timestamp", "unknown")
 
     print(f"Restoring PATH from backup (saved at {saved_ts})...")
+    if dry_run:
+        print(f"[DRY RUN] Would set PATH ({saved_scope}):")
+        print(f"[DRY RUN]   {saved_path[:120]}{'...' if len(saved_path) > 120 else ''}")
+        print("[DRY RUN] No changes were made.")
+        return
+
     set_path(saved_path, saved_scope)
     print("PATH restored successfully.")
 
@@ -228,7 +250,7 @@ def _validate_path_not_empty(new_path: str, sep: str) -> None:
         )
 
 
-def set_path(new_path: str, scope: str = "Machine") -> None:
+def set_path(new_path: str, scope: str = "Machine", *, dry_run: bool = False) -> None:
     """Set ``PATH`` to *new_path*.
 
     On Windows the change is written to the system registry via PowerShell.
@@ -238,6 +260,7 @@ def set_path(new_path: str, scope: str = "Machine") -> None:
     Args:
         new_path: The full ``PATH`` string to set.
         scope: ``"Machine"`` or ``"User"`` (Windows only; ignored on Unix).
+        dry_run: If ``True``, print what would be done without any changes.
 
     Raises:
         ValueError:
@@ -247,6 +270,13 @@ def set_path(new_path: str, scope: str = "Machine") -> None:
     """
     sep = _get_sep()
     _validate_path_not_empty(new_path, sep)
+
+    if dry_run:
+        print(f"[DRY RUN] Would set PATH ({scope}):")
+        print(f"[DRY RUN]   {new_path[:120]}{'...' if len(new_path) > 120 else ''}")
+        print("[DRY RUN] Would auto-backup current PATH first")
+        print("[DRY RUN] No changes were made.")
+        return
 
     # Auto-backup before modifying (non-fatal)
     try:
@@ -290,7 +320,7 @@ def save_path_to_file(
 # ---------------------------------------------------------------------------
 
 
-def clear_path(scope: str = "Machine", *, confirm: bool = False) -> None:
+def clear_path(scope: str = "Machine", *, confirm: bool = False, dry_run: bool = False) -> None:
     """Set ``PATH`` to an empty string.
 
     .. warning::
@@ -302,6 +332,7 @@ def clear_path(scope: str = "Machine", *, confirm: bool = False) -> None:
         scope: ``"Machine"`` or ``"User"`` (Windows only; ignored on Unix).
         confirm: Pass ``True`` to acknowledge the destructive nature of
                  this operation.  Raises ``ValueError`` if ``False``.
+        dry_run: If ``True``, print what would be cleared without changes.
 
     Raises:
         ValueError: If *confirm* is not ``True``.
@@ -312,6 +343,14 @@ def clear_path(scope: str = "Machine", *, confirm: bool = False) -> None:
             "Refusing to clear PATH without explicit confirmation. "
             "Pass confirm=True to acknowledge this destructive operation."
         )
+
+    if dry_run:
+        current: str = get_path(scope)
+        print(f"[DRY RUN] Would clear PATH ({scope}):")
+        print(f"[DRY RUN]   Current: {current[:120]}{'...' if len(current) > 120 else ''}")
+        print("[DRY RUN] Would auto-backup current PATH first")
+        print("[DRY RUN] No changes were made.")
+        return
 
     # Auto-backup before clearing (non-fatal)
     try:

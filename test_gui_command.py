@@ -20,6 +20,19 @@ from state import state
 _SEP = ";"
 
 
+@pytest.fixture(autouse=True)
+def _patch_path_list_file(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Redirect ``gui_command._PATH_LIST_FILE`` to an isolated temp path.
+
+    The real module writes ``path_list.txt`` to the user's app data
+    directory.  In tests we want it inside ``tmp_path`` so each test gets
+    a clean slate and no real filesystem state is modified.
+    """
+    monkeypatch.setattr(
+        gui_command, "_PATH_LIST_FILE", tmp_path / "path_list.txt"
+    )
+
+
 @pytest.fixture
 def mock_askdirectory() -> MagicMock:
     """Mock tkinter.filedialog.askdirectory to return a fixed path."""
@@ -172,18 +185,18 @@ class TestOpenPathEditor:
     ) -> MagicMock:
         """Helper: set up the environment and invoke the submit_path closure.
 
-        Changes cwd to *tmp_path* so that ``submit_path`` finds the
-        ``path_list.txt`` file relative to the working directory.
+        Creates the ``path_list.txt`` file in ``gui_command._PATH_LIST_FILE``
+        (which is patched to ``tmp_path / path_list.txt`` by the autouse
+        ``_patch_path_list_file`` fixture).
         Uses a fresh Button mock to avoid cross-test state pollution from the
         module-level mock in conftest.py.
 
         Returns the ``set_path`` mock so callers can make assertions.
         """
-        monkeypatch.chdir(tmp_path)
         state.selected_path = old_path
 
-        # Create the path list file in the temp (now current) directory
-        path_list = Path("path_list.txt")
+        # Create the path list file via gui_command's patched path
+        path_list = gui_command._PATH_LIST_FILE
         content = f"C:\\Windows{_SEP}{old_path}{_SEP}C:\\Other{_SEP}"
         path_list.write_text(content, encoding="utf-8")
 
@@ -232,8 +245,7 @@ class TestOpenPathEditor:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """Submit writes the updated paths back to the file."""
-        monkeypatch.chdir(tmp_path)
-        path_list = Path("path_list.txt")
+        path_list = gui_command._PATH_LIST_FILE
         old_content = f"C:\\Windows{_SEP}C:\\Old\\Path{_SEP}C:\\Other{_SEP}"
         path_list.write_text(old_content, encoding="utf-8")
 
@@ -338,39 +350,28 @@ class TestCreateScrollablePathList:
             mock_error.assert_called_once()
             assert "Failed to retrieve PATH" in mock_error.call_args[0][1]
 
-    def test_saves_path_to_file(
-        self, patch_cmd_path: dict[str, MagicMock]
+    def test_writes_to_path_list_file(
+        self, patch_cmd_path: dict[str, MagicMock], tmp_path: Path
     ) -> None:
+        """Verify the path list file is written by create_scrollable_path_list."""
         gui_command.create_scrollable_path_list(MagicMock())
-        patch_cmd_path["save_path_to_file"].assert_called_once()
-
-    def test_shows_error_when_path_file_missing(
-        self,
-        patch_cmd_path: dict[str, MagicMock],
-        tmp_project_dir: Path,
-    ) -> None:
-        """When path_list.txt is missing after save, show an error."""
-        gui_command.create_scrollable_path_list(MagicMock())
-        with patch.object(gui_command.messagebox, "showerror") as mock_error:
-            # Force second call so it hits the file-not-found path
-            patch_cmd_path["save_path_to_file"].side_effect = None
-            # The file doesn't exist in tmp_project_dir by default
-            gui_command.create_scrollable_path_list(MagicMock())
-            mock_error.assert_called_once()
-            assert "Could not create path list file" in mock_error.call_args[0][1]
+        path_list = tmp_path / "path_list.txt"
+        assert path_list.exists()
+        content = path_list.read_text(encoding="utf-8")
+        assert "C:\\Windows" in content
+        assert "C:\\Program Files" in content
 
     def test_reads_paths_from_file_and_populates_listbox(
         self,
         patch_cmd_path: dict[str, MagicMock],
-        tmp_project_dir: Path,
+        tmp_path: Path,
     ) -> None:
-        """Verify paths are parsed from the file and inserted into the listbox."""
-        path_list = Path("path_list.txt")
-        path_list.write_text(
-            f"C:\\Windows{_SEP}C:\\Program Files{_SEP}C:\\MyApp{_SEP}",
-            encoding="utf-8",
-        )
+        """Verify paths from mocked get_path() are inserted into the listbox.
 
+        ``create_scrollable_path_list`` calls ``get_path()`` and overwrites
+        the file before reading it, so the listbox reflects the mocked path
+        string, not any pre-written file content.
+        """
         with patch("gui_command.Listbox") as mock_listbox_cls:
             mock_listbox = MagicMock()
             mock_listbox_cls.return_value = mock_listbox
@@ -385,15 +386,14 @@ class TestCreateScrollablePathList:
             ]
             assert "C:\\Windows" in inserted_paths
             assert "C:\\Program Files" in inserted_paths
-            assert "C:\\MyApp" in inserted_paths
 
     def test_shows_error_on_read_failure(
         self,
         patch_cmd_path: dict[str, MagicMock],
-        tmp_project_dir: Path,
+        tmp_path: Path,
     ) -> None:
         """When reading the path file fails, show an error."""
-        path_list = Path("path_list.txt")
+        path_list = tmp_path / "path_list.txt"
         path_list.write_text(f"C:\\Windows{_SEP}", encoding="utf-8")
 
         with (
@@ -407,10 +407,10 @@ class TestCreateScrollablePathList:
     def test_on_select_updates_selected_path(
         self,
         patch_cmd_path: dict[str, MagicMock],
-        tmp_project_dir: Path,
+        tmp_path: Path,
     ) -> None:
         """Simulate clicking on an item in the listbox."""
-        path_list = Path("path_list.txt")
+        path_list = tmp_path / "path_list.txt"
         path_list.write_text(
             f"C:\\Windows{_SEP}C:\\Program Files{_SEP}",
             encoding="utf-8",
