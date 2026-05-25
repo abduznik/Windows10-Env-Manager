@@ -15,6 +15,8 @@ Backup / Restore
     up the current PATH first.  Use ``restore_path()`` to roll back.
 """
 
+from __future__ import annotations
+
 import json
 import os
 import subprocess
@@ -49,23 +51,34 @@ def _backup_glob() -> str:
     return f"{_BACKUP_PREFIX}_*{_BACKUP_SUFFIX}"
 
 
+_timestamp_counter: int = 0
+
+
 def _backup_timestamp() -> str:
     """Return a filesystem-safe timestamp string with microsecond precision.
 
     Microseconds ensure unique filenames even when multiple backups happen
     in rapid succession (e.g. during testing or batch operations).
+    A monotonic counter disambiguates calls within the same microsecond.
     """
-    return datetime.now().strftime("%Y%m%dT%H%M%S%f")
+    global _timestamp_counter
+    _timestamp_counter += 1
+    ts = datetime.now().strftime("%Y%m%dT%H%M%S%f")
+    return f"{ts}_{_timestamp_counter:04d}"
 
 
 def _parse_backup_timestamp(filename: str) -> str:
     """Extract the timestamp string from a backup filename.
 
-    ``path_backup_20260525T120000.json`` → ``2026-05-25T12:00:00``
-    ``path_backup_20260525T120000123456.json`` → ``2026-05-25T12:00:00.123456``
+    ``path_backup_20260525T120000_0001.json`` → ``2026-05-25T12:00:00``
+    ``path_backup_20260525T120000123456_0001.json`` → ``2026-05-25T12:00:00.123456``
     (ISO-ish format for human display).
+
+    The four-digit counter suffix is stripped before formatting.
     """
     ts_raw = filename.replace(f"{_BACKUP_PREFIX}_", "").replace(_BACKUP_SUFFIX, "")
+    # Strip trailing monotonic counter (e.g. "_0001")
+    ts_raw = ts_raw.rsplit("_", 1)[0]
     # Convert YYYYMMDDTHHMMSS[ffffff] -> YYYY-MM-DDTHH:MM:SS[.ffffff]
     if len(ts_raw) in (15, 21) and "T" in ts_raw:
         date_part, time_part = ts_raw.split("T")
