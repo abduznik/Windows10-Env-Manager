@@ -9,6 +9,7 @@ Note: ``ctypes.windll`` is mocked globally by the ``mock_windll`` fixture in
 ``conftest.py``.
 """
 
+import os
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -291,3 +292,128 @@ class TestSavePathToFileDefault:
         cmd_path.save_path_to_file("C:\\Test")
         assert defaults.exists()
         assert defaults.read_text(encoding="utf-8") == "C:\\Test"
+
+
+# ---------------------------------------------------------------------------
+# Unix / macOS code paths (``_IS_WINDOWS = False``)
+# ---------------------------------------------------------------------------
+
+
+class UnixMixin:
+    """Mixin that patches ``_IS_WINDOWS`` to ``False`` for Unix code paths."""
+
+    @pytest.fixture(autouse=True)
+    def _patch_unix(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(cmd_path, "_IS_WINDOWS", False)
+
+
+class TestCheckAdminUnix(UnixMixin):
+    """check_admin when running on Unix / macOS."""
+
+    @patch("os.geteuid", return_value=0)
+    def test_returns_true_when_root(self, mock_geteuid: MagicMock) -> None:
+        assert cmd_path.check_admin() is True
+
+    @patch("os.geteuid", return_value=1000)
+    def test_returns_false_when_not_root(self, mock_geteuid: MagicMock) -> None:
+        assert cmd_path.check_admin() is False
+
+    @patch("os.geteuid", side_effect=OSError)
+    def test_handles_os_error(self, mock_geteuid: MagicMock) -> None:
+        assert cmd_path.check_admin() is False
+
+
+class TestGetPathUnix(UnixMixin):
+    """get_path when running on Unix / macOS."""
+
+    def test_returns_os_environ_path(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("PATH", "/usr/bin:/bin:/usr/local/bin")
+        result = cmd_path.get_path()
+        assert result == "/usr/bin:/bin:/usr/local/bin"
+
+    def test_returns_empty_string_when_not_set(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("PATH", raising=False)
+        result = cmd_path.get_path()
+        assert result == ""
+
+
+class TestSetPathUnix(UnixMixin):
+    """set_path when running on Unix / macOS."""
+
+    def test_updates_os_environ(self) -> None:
+        cmd_path.set_path("/usr/local/bin:/usr/bin")
+        assert os.environ["PATH"] == "/usr/local/bin:/usr/bin"
+
+    def test_updates_shell_config(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        """Verify _update_shell_config is called (creates/updates rc file)."""
+        fake_home = tmp_path / "fake_home"
+        fake_home.mkdir()
+        monkeypatch.setattr(Path, "home", lambda: fake_home)
+        monkeypatch.setenv("SHELL", "/bin/zsh")
+
+        cmd_path.set_path("/opt/myapp/bin:/usr/bin")
+
+        rc_file = fake_home / ".zshrc"
+        assert rc_file.exists()
+        content = rc_file.read_text(encoding="utf-8")
+        assert "export PATH=" in content
+        assert "/opt/myapp/bin:/usr/bin" in content
+
+    def test_replaces_existing_path_in_shell_config(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        """Calling set_path twice should not duplicate export lines."""
+        fake_home = tmp_path / "fake_home2"
+        fake_home.mkdir()
+        monkeypatch.setattr(Path, "home", lambda: fake_home)
+        monkeypatch.setenv("SHELL", "/bin/zsh")
+
+        cmd_path.set_path("/first/path")
+        cmd_path.set_path("/second/path")
+
+        rc_file = fake_home / ".zshrc"
+        content = rc_file.read_text(encoding="utf-8")
+        assert content.count("export PATH=") == 1
+        assert "/second/path" in content
+        assert "/first/path" not in content
+
+
+class TestClearPathUnix(UnixMixin):
+    """clear_path when running on Unix / macOS."""
+
+    def test_clears_os_environ(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("PATH", "/usr/bin:/bin")
+        cmd_path.clear_path()
+        assert os.environ["PATH"] == ""
+
+
+class TestAddToPathUnix(UnixMixin):
+    """add_to_path when running on Unix / macOS."""
+
+    @patch("cmd_path.get_path")
+    @patch("cmd_path.set_path")
+    def test_adds_new_path_with_colon_separator(
+        self,
+        mock_set_path: MagicMock,
+        mock_get_path: MagicMock,
+    ) -> None:
+        mock_get_path.return_value = "/usr/bin:/usr/local/bin"
+        cmd_path.add_to_path("/opt/myapp/bin")
+        mock_set_path.assert_called_once_with(
+            "/usr/bin:/usr/local/bin:/opt/myapp/bin:", "Machine"
+        )
+
+    @patch("cmd_path.get_path")
+    @patch("cmd_path.set_path")
+    def test_handles_multiple_new_paths_with_colon(
+        self,
+        mock_set_path: MagicMock,
+        mock_get_path: MagicMock,
+    ) -> None:
+        mock_get_path.return_value = "/usr/bin"
+        cmd_path.add_to_path("/opt/app1:/opt/app2")
+        mock_set_path.assert_called_once_with(
+            "/usr/bin:/opt/app1:/opt/app2:", "Machine"
+        )
+
+    def test_empty_path_raises(self) -> None:
+        with pytest.raises(ValueError, match="Cannot add an empty path"):
+            cmd_path.add_to_path("")
