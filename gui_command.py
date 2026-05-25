@@ -10,6 +10,9 @@ from utils import ASSETS_PATH
 from state import state
 
 
+_SEP = ";"  # internal path-list file delimiter (always ";" across all platforms)
+
+
 def relative_to_assets(path: str) -> Path:
     """Resolve a path relative to the assets directory."""
     return ASSETS_PATH / Path(path)
@@ -96,7 +99,7 @@ def open_path_editor() -> None:
             path_content: str = Path(path_file).read_text(encoding="utf-8").strip()
 
             # Split into individual paths and remove empties
-            paths: list[str] = [p for p in path_content.split(";") if p]
+            paths: list[str] = [p for p in path_content.split(_SEP) if p]
 
             if state.selected_path not in paths:
                 raise ValueError(f"Selected path '{state.selected_path}' not found in the file.")
@@ -104,14 +107,14 @@ def open_path_editor() -> None:
             # Replace the old path with the new one
             paths = [new_path if p == state.selected_path else p for p in paths]
 
-            # Join into semicolon-separated string (no trailing semicolon)
-            updated_path_content: str = ";".join(paths)
+            # Join with platform path separator (no trailing separator)
+            updated_path_content: str = _SEP.join(paths)
 
             # Update the system PATH via cmd_path
             cmd_path.set_path(updated_path_content)
 
-            # Write back to the file
-            Path(path_file).write_text(updated_path_content + ";", encoding="utf-8")
+            # Write back to the file (add trailing separator for consistency)
+            Path(path_file).write_text(updated_path_content + _SEP, encoding="utf-8")
 
             messagebox.showinfo(
                 "Path Updated",
@@ -176,7 +179,7 @@ def create_scrollable_path_list(canvas: Canvas) -> None:
 
     try:
         paths: list[str] = [
-            p for p in path_file.read_text(encoding="utf-8").split(";") if p
+            p for p in path_file.read_text(encoding="utf-8").split(_SEP) if p
         ]
     except Exception as e:
         messagebox.showerror("Error", f"Failed to read path list: {e}")
