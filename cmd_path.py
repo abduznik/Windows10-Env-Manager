@@ -380,7 +380,7 @@ def clear_path(scope: str = "Machine", *, confirm: bool = False, dry_run: bool =
 # ---------------------------------------------------------------------------
 
 
-def add_to_path(new_path: str, system_wide: bool = True) -> None:
+def add_to_path(new_path: str, system_wide: bool = True, *, dry_run: bool = False) -> None:
     """Add one or more directories to ``PATH``.
 
     Duplicates are detected and skipped silently.
@@ -391,6 +391,7 @@ def add_to_path(new_path: str, system_wide: bool = True) -> None:
         system_wide:
             ``True`` → ``"Machine"`` scope (Windows) or global config (Unix).
             ``False`` → ``"User"`` scope.
+        dry_run: If ``True``, print what would be done without making changes.
 
     Raises:
         ValueError: If the input is empty or no valid paths remain after
@@ -428,6 +429,16 @@ def add_to_path(new_path: str, system_wide: bool = True) -> None:
         return
 
     updated_path: str = sep.join(existing_entries + entries_to_add) + sep
+
+    if dry_run:
+        print(f"[DRY RUN] Would add to PATH ({scope}):")
+        for entry in entries_to_add:
+            print(f"[DRY RUN]   + {entry}")
+        print("[DRY RUN] Resulting PATH:")
+        print(f"[DRY RUN]   {updated_path[:200]}{'...' if len(updated_path) > 200 else ''}")
+        print("[DRY RUN] No changes were made.")
+        return
+
     set_path(updated_path, scope)
 
     print(
@@ -447,7 +458,9 @@ def add_to_path(new_path: str, system_wide: bool = True) -> None:
 
 
 if __name__ == "__main__":
-    if not check_admin():
+    dry_run: bool = "--dry-run" in sys.argv
+
+    if not dry_run and not check_admin():
         msg = (
             "This script must be run as an administrator."
             if _IS_WINDOWS
@@ -457,8 +470,19 @@ if __name__ == "__main__":
         sys.exit(1)
 
     full_path_string: str = get_path()
-    save_path_to_file(full_path_string)
 
-    if len(sys.argv) > 1:
-        custom_path: str = sys.argv[1]
-        add_to_path(custom_path, system_wide=True)
+    if dry_run:
+        print("[DRY RUN] == CLI dry-run mode — no changes will be made ==")
+        print()
+        print(f"[DRY RUN] Current PATH ({'Machine' if _IS_WINDOWS else 'session'}):")
+        print(f"[DRY RUN]   {full_path_string[:200]}{'...' if len(full_path_string) > 200 else ''}")
+        print()
+    else:
+        # Write current PATH to file (only in real mode)
+        save_path_to_file(full_path_string)
+
+    # Collect non-flag arguments
+    path_args: list[str] = [a for a in sys.argv[1:] if a != "--dry-run"]
+    if path_args:
+        custom_path: str = path_args[0]
+        add_to_path(custom_path, system_wide=True, dry_run=dry_run)
