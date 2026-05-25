@@ -36,6 +36,12 @@ def create_new_dir() -> None:
     ):
         return
 
+    # Auto-backup before modifying (non-fatal)
+    try:
+        cmd_path.backup_path()
+    except Exception as backup_err:
+        print(f"Warning: failed to backup PATH: {backup_err}")
+
     try:
         cmd_path.add_to_path(selected_directory)
         messagebox.showinfo(
@@ -46,12 +52,6 @@ def create_new_dir() -> None:
     except Exception as e:
         messagebox.showerror("Error", str(e))
         print(f"Error adding directory to PATH: {e}")
-
-    # Backup before modification
-    try:
-        cmd_path.backup_path()
-    except Exception as backup_err:
-        print(f"Warning: failed to backup PATH: {backup_err}")
 
 
 def open_path_editor() -> None:
@@ -184,6 +184,94 @@ def open_path_editor() -> None:
     popup.cancel_image = cancel_image
 
 
+def _maybe_offer_restore() -> None:
+    """Check if multiple backups exist and offer to restore if so."""
+    try:
+        suggestion = cmd_path.suggest_restore()
+        if suggestion is not None:
+            count: int = suggestion["count"]
+            oldest: str = suggestion["oldest"]
+            newest: str = suggestion["newest"]
+            if messagebox.askyesno(
+                "PATH Backups Available",
+                f"You have {count} saved PATH backups.\n\n"
+                f"Newest: {newest}\n"
+                f"Oldest: {oldest}\n\n"
+                "Would you like to restore a previous version?",
+            ):
+                _show_restore_dialog()
+    except Exception as e:
+        # Non-fatal — just log
+        print(f"Warning: could not check backups: {e}")
+
+
+def _show_restore_dialog() -> None:
+    """Show a dialog listing all available backups for the user to pick from."""
+    try:
+        backups = cmd_path.list_backups()
+    except Exception as e:
+        messagebox.showerror("Error", f"Failed to list backups: {e}")
+        return
+
+    if not backups:
+        messagebox.showinfo("No Backups", "No backups found.")
+        return
+
+    popup: Toplevel = Toplevel()
+    popup.title("Restore PATH from Backup")
+    popup.geometry("500x400")
+    popup.configure(bg="#0949A8")
+
+    Label(
+        popup,
+        text="Select a backup to restore:",
+        bg="#0949A8",
+        fg="white",
+        font=("Arial", 11),
+    ).pack(pady=(15, 5))
+
+    backup_listbox: Listbox = Listbox(
+        popup,
+        bg="#083A85",
+        fg="white",
+        selectmode=SINGLE,
+        font=("Courier", 9),
+        width=65,
+        height=12,
+    )
+
+    for b in backups:
+        ts: str = b["timestamp"]
+        path_preview: str = b["path"]
+        scope: str = b["scope"]
+        backup_listbox.insert("end", f"{ts}  [{scope}]  {path_preview}")
+
+    backup_listbox.pack(padx=15, pady=10)
+
+    def do_restore() -> None:
+        selected = backup_listbox.curselection()
+        if not selected:
+            messagebox.showinfo("No Selection", "Please select a backup first.")
+            return
+        idx: int = selected[0]
+        try:
+            cmd_path.restore_at_index(idx)
+            messagebox.showinfo("Restored", "PATH restored successfully!")
+            popup.destroy()
+        except Exception as e:
+            messagebox.showerror("Error", str(e))
+
+    Button(
+        popup,
+        text="Restore Selected Backup",
+        bg="#0A5BC8",
+        fg="white",
+        font=("Arial", 10),
+        command=do_restore,
+        relief="flat",
+    ).pack(pady=(5, 15))
+
+
 def create_scrollable_path_list(canvas: Canvas) -> None:
     """Create a scrollable list of paths retrieved from cmd_path."""
 
@@ -207,6 +295,9 @@ def create_scrollable_path_list(canvas: Canvas) -> None:
         messagebox.showerror("Error", f"Failed to read path list: {e}")
         print(f"Error reading path list: {e}")
         return
+
+    # Check if there are multiple backups to suggest a restore
+    _maybe_offer_restore()
 
     # Create a frame inside the canvas to hold the listbox
     frame: Frame = Frame(canvas, bg="#0948A8", width=386)

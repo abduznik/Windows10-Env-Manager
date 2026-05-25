@@ -23,13 +23,157 @@ from datetime import datetime
 from pathlib import Path
 
 
-_BACKUP_FILE = "path_backup.txt"
+_BACKUP_PREFIX = "path_backup"
+_BACKUP_SUFFIX = ".json"
 
 
 def _appdata_dir() -> Path:
     """Lazy-import of utils.get_appdata_dir to avoid circular imports."""
     from utils import get_appdata_dir as _get_appdata_dir
     return _get_appdata_dir()
+
+
+# ---------------------------------------------------------------------------
+# Backup helpers (versioned timestamped files)
+# ---------------------------------------------------------------------------
+
+
+def _backup_dir() -> Path:
+    """Return the directory where versioned backup files are stored."""
+    return _appdata_dir()
+
+
+def _backup_glob() -> str:
+    """Glob pattern for finding all backup files in the backup directory."""
+    return f"{_BACKUP_PREFIX}_*{_BACKUP_SUFFIX}"
+
+
+def _backup_timestamp() -> str:
+    """Return a filesystem-safe timestamp string with microsecond precision.
+
+    Microseconds ensure unique filenames even when multiple backups happen
+    in rapid succession (e.g. during testing or batch operations).
+    """
+    return datetime.now().strftime("%Y%m%dT%H%M%S%f")
+
+
+def _parse_backup_timestamp(filename: str) -> str:
+    """Extract the timestamp string from a backup filename.
+
+    ``path_backup_20260525T120000.json`` → ``2026-05-25T12:00:00``
+    ``path_backup_20260525T120000123456.json`` → ``2026-05-25T12:00:00.123456``
+    (ISO-ish format for human display).
+    """
+    ts_raw = filename.replace(f"{_BACKUP_PREFIX}_", "").replace(_BACKUP_SUFFIX, "")
+    # Convert YYYYMMDDTHHMMSS[ffffff] -> YYYY-MM-DDTHH:MM:SS[.ffffff]
+    if len(ts_raw) in (15, 21) and "T" in ts_raw:
+        date_part, time_part = ts_raw.split("T")
+        if len(date_part) == 8:
+            date_part = f"{date_part[:4]}-{date_part[4:6]}-{date_part[6:8]}"
+        if len(time_part) >= 6:
+            time_part = f"{time_part[:2]}:{time_part[2:4]}:{time_part[4:6]}"
+            if len(time_part) > 8:  # includes microseconds
+                time_part = f"{time_part[:8]}.{time_part[8:]}"
+        return f"{date_part}T{time_part}"
+    return ts_raw
+
+
+def _backup_file_path() -> Path:
+    """Return the ``Path`` to the backup file in the app data directory.
+
+    .. deprecated::
+        Use versioned backups via ``backup_path()`` instead.
+    """
+    return _backup_dir() / f"{_BACKUP_PREFIX}.txt"
+
+
+def _backup_files() -> list[Path]:
+    """Return sorted list of versioned backup file paths (newest first)."""
+    bdir = _backup_dir()
+    files = sorted(bdir.glob(_backup_glob()), reverse=True)
+    return files
+
+
+def list_backups() -> list[dict[str, str]]:
+    """Return a list of all available backups, newest first.
+
+    Each entry contains:
+
+    - ``index``: ordinal for use with ``restore_at_index()``
+    - ``timestamp``: human-readable ISO timestamp
+    - ``path``: the PATH value that was backed up (first 80 chars)
+    - ``scope``: ``"Machine"`` or ``"User"``
+
+    Returns:
+        List of backup metadata dicts. Empty list if no backups exist.
+    """
+    result: list[dict[str, str]] = []
+    for idx, fp in enumerate(_backup_files()):
+        try:
+            data = json.loads(fp.read_text(encoding="utf-8"))
+            ts_raw = _parse_backup_timestamp(fp.name)
+            result.append({
+                "index": str(idx),
+                "timestamp": ts_raw,
+                "path": data.get("path", "")[:80],
+                "scope": data.get("scope", "Machine"),
+                "filename": fp.name,
+            })
+        except (json.JSONDecodeError, OSError):
+            continue
+    return result
+
+
+def restore_at_index(index: int, *, dry_run: bool = False) -> None:
+    """Restore ``PATH`` from the backup at *index* (0 = newest).
+
+    Args:
+        index: 0-based index into the sorted backup list (0 = most recent).
+        dry_run: If ``True``, print what would be restored without writing.
+
+    Raises:
+        IndexError: If *index* is out of range.
+        ValueError: If the backup data is malformed.
+    """
+    files = _backup_files()
+    if not files:
+        raise FileNotFoundError("No PATH backups found.")
+    if index < 0 or index >= len(files):
+        raise IndexError(
+            f"Backup index {index} out of range. "
+            f"There are {len(files)} backups (0-{len(files) - 1})."
+        )
+
+    fp = files[index]
+    try:
+        backup: dict[str, str] = json.loads(
+            fp.read_text(encoding="utf-8")
+        )
+    except json.JSONDecodeError as exc:
+        raise ValueError(
+            f"Backup file '{fp.name}' is corrupted: {exc}"
+        ) from exc
+
+    if "path" not in backup:
+        raise ValueError(
+            f"Backup file '{fp.name}' is missing the 'path' field."
+        )
+
+    saved_path: str = backup["path"]
+    saved_scope: str = backup.get("scope", "Machine")
+    saved_ts: str = backup.get("timestamp", "unknown")
+
+    ts_display = _parse_backup_timestamp(fp.name) if saved_ts == "unknown" else saved_ts
+    print(f"Restoring PATH from backup #{index} (saved at {ts_display})...")
+
+    if dry_run:
+        print(f"[DRY RUN] Would set PATH ({saved_scope}):")
+        print(f"[DRY RUN]   {saved_path[:120]}{'...' if len(saved_path) > 120 else ''}")
+        print("[DRY RUN] No changes were made.")
+        return
+
+    set_path(saved_path, saved_scope)
+    print("PATH restored successfully.")
 
 
 # ---------------------------------------------------------------------------
@@ -83,11 +227,6 @@ def _update_shell_config(new_path: str) -> None:
 # ---------------------------------------------------------------------------
 
 
-def _backup_file_path() -> Path:
-    """Return the ``Path`` to the backup file in the app data directory."""
-    return _appdata_dir() / _BACKUP_FILE
-
-
 def backup_path(scope: str = "Machine", *, dry_run: bool = False) -> str:
     """Save the current ``PATH`` to a backup file and return its value.
 
@@ -104,10 +243,13 @@ def backup_path(scope: str = "Machine", *, dry_run: bool = False) -> str:
     """
     current: str = get_path(scope)
 
+    ts = _backup_timestamp()
+    backup_file = _backup_dir() / f"{_BACKUP_PREFIX}_{ts}{_BACKUP_SUFFIX}"
+
     if dry_run:
         print(f"[DRY RUN] Would backup current PATH ({scope}):")
         print(f"[DRY RUN]   {current[:120]}{'...' if len(current) > 120 else ''}")
-        print(f"[DRY RUN]   → {_backup_file_path()}")
+        print(f"[DRY RUN]   → {backup_file}")
         return current
 
     backup: dict[str, str] = {
@@ -115,61 +257,48 @@ def backup_path(scope: str = "Machine", *, dry_run: bool = False) -> str:
         "path": current,
         "timestamp": datetime.now().isoformat(),
     }
-    _backup_file_path().write_text(
+    backup_file.write_text(
         json.dumps(backup, indent=2), encoding="utf-8"
     )
     return current
 
 
 def restore_path(scope: str = "Machine", *, dry_run: bool = False) -> None:
-    """Restore ``PATH`` from the most recent backup.
+    """Restore ``PATH`` from the most recent versioned backup.
 
-    Reads the backup file created by the most recent ``backup_path()``,
-    ``set_path()``, or ``clear_path()`` call, and writes it back to the
-    environment via ``set_path()``.
+    This is a convenience wrapper around ``restore_at_index(0)`` (the
+    newest backup).
 
     Args:
         scope: Ignored; the scope from the backup file is used instead.
         dry_run: If ``True``, print what would be restored without writing.
 
     Raises:
-        FileNotFoundError: If no backup file exists.
+        FileNotFoundError: If no backup files exist.
         ValueError: If the backup data is malformed.
     """
-    backup_path_obj: Path = _backup_file_path()
-    if not backup_path_obj.exists():
-        raise FileNotFoundError(
-            f"No PATH backup found at '{_BACKUP_FILE}'. "
-            "Run backup_path() first."
-        )
+    restore_at_index(0, dry_run=dry_run)
 
-    try:
-        backup: dict[str, str] = json.loads(
-            backup_path_obj.read_text(encoding="utf-8")
-        )
-    except json.JSONDecodeError as exc:
-        raise ValueError(
-            f"Backup file '{_BACKUP_FILE}' is corrupted: {exc}"
-        ) from exc
 
-    if "path" not in backup:
-        raise ValueError(
-            f"Backup file '{_BACKUP_FILE}' is missing the 'path' field."
-        )
+def suggest_restore() -> dict | None:
+    """Check whether the user might want to restore a previous PATH.
 
-    saved_path: str = backup["path"]
-    saved_scope: str = backup.get("scope", scope)
-    saved_ts: str = backup.get("timestamp", "unknown")
+    Looks at the number of available backups.  If 3 or more exist, it
+    returns info about the oldest and newest so the GUI can offer to
+    restore.
 
-    print(f"Restoring PATH from backup (saved at {saved_ts})...")
-    if dry_run:
-        print(f"[DRY RUN] Would set PATH ({saved_scope}):")
-        print(f"[DRY RUN]   {saved_path[:120]}{'...' if len(saved_path) > 120 else ''}")
-        print("[DRY RUN] No changes were made.")
-        return
-
-    set_path(saved_path, saved_scope)
-    print("PATH restored successfully.")
+    Returns:
+        A dict with ``count``, ``newest``, ``oldest`` keys, or ``None``
+        if fewer than 3 backups exist.
+    """
+    backups = list_backups()
+    if len(backups) < 3:
+        return None
+    return {
+        "count": len(backups),
+        "newest": backups[0]["timestamp"],
+        "oldest": backups[-1]["timestamp"],
+    }
 
 
 # ---------------------------------------------------------------------------

@@ -31,16 +31,15 @@ def _patch_windows(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.fixture(autouse=True)
-def _patch_backup_path(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    """Redirect the backup file path to the temporary directory.
+def _patch_backup_dir(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Redirect the backup directory to a temporary path.
 
-    ``cmd_path._backup_file_path()`` normally returns a path inside the
-    app data directory (e.g. ``~/Library/Application Support/…``).  In
-    tests we want it to write to the isolated ``tmp_path`` instead.
+    ``cmd_path._backup_dir()`` normally returns the user's app data
+    directory (e.g. ``~/Library/Application Support/…``).  In tests we
+    want versioned backup files to be written to the isolated ``tmp_path``
+    instead.
     """
-    monkeypatch.setattr(
-        cmd_path, "_backup_file_path", lambda: tmp_path / "path_backup.txt"
-    )
+    monkeypatch.setattr(cmd_path, "_backup_dir", lambda: tmp_path)
 
 
 # ---------------------------------------------------------------------------
@@ -440,11 +439,10 @@ class TestSavePathToFileDefault:
 
 
 class TestBackupPath:
-    """backup_path and restore_path on Windows."""
+    """Versioned backups via ``backup_path`` and ``restore_path`` on Windows."""
 
     @patch("subprocess.run")
-    def test_backup_saves_current_path_to_file(self, mock_run: MagicMock, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.chdir(tmp_path)
+    def test_backup_creates_versioned_file(self, mock_run: MagicMock, tmp_path: Path) -> None:
         mock_process = MagicMock()
         mock_process.returncode = 0
         mock_process.stdout = "C:\\Windows;C:\\Program Files\n"
@@ -454,11 +452,13 @@ class TestBackupPath:
         result = cmd_path.backup_path()
 
         assert result == "C:\\Windows;C:\\Program Files"
-        backup_file = tmp_path / "path_backup.txt"
-        assert backup_file.exists()
+
+        # Should create a versioned file: path_backup_20260525T120000.json
+        files = list(tmp_path.glob("path_backup_*.json"))
+        assert len(files) == 1
 
         import json
-        data = json.loads(backup_file.read_text(encoding="utf-8"))
+        data = json.loads(files[0].read_text(encoding="utf-8"))
         assert data["path"] == "C:\\Windows;C:\\Program Files"
         assert data["scope"] == "Machine"
         assert "timestamp" in data
@@ -474,15 +474,12 @@ class TestBackupPath:
         result = cmd_path.backup_path()
         assert result == "C:\\MyPath"
 
-    def test_restore_raises_when_no_backup(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.chdir(tmp_path)
-        with pytest.raises(FileNotFoundError, match="No PATH backup"):
+    def test_restore_raises_when_no_backup(self) -> None:
+        with pytest.raises(FileNotFoundError, match="No PATH backups"):
             cmd_path.restore_path()
 
     @patch("subprocess.run")
-    def test_restore_sets_path_from_backup(self, mock_run: MagicMock, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.chdir(tmp_path)
-        # First backup
+    def test_restore_sets_path_from_newest_backup(self, mock_run: MagicMock) -> None:
         mock_process = MagicMock()
         mock_process.returncode = 0
         mock_process.stdout = "C:\\Original\n"
@@ -490,38 +487,95 @@ class TestBackupPath:
         mock_run.return_value = mock_process
 
         cmd_path.backup_path()
-
-        # Now restore
         cmd_path.restore_path()
 
-        # set_path should have been called with the original value
         last_call = mock_run.call_args
         command_str = " ".join(last_call[0][0])
         assert "C:\\Original" in command_str
 
     @patch("subprocess.run")
-    def test_restore_uses_backup_scope(self, mock_run: MagicMock, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.chdir(tmp_path)
-        # Backup with User scope
-        mock_process = MagicMock()
-        mock_process.returncode = 0
-        mock_process.stdout = "C:\\UserPath\n"
-        mock_process.stderr = ""
-        mock_run.return_value = mock_process
+    def test_multiple_backups_create_separate_files(self, mock_run: MagicMock, tmp_path: Path) -> None:
+        """Each call to backup_path creates a distinct file."""
+        call_count: int = 0
+        responses: list[str] = [
+            "C:\\First",
+            "C:\\Second",
+            "C:\\Third",
+        ]
 
-        cmd_path.backup_path(scope="User")
+        def side_effect(*args: object, **kwargs: object) -> MagicMock:
+            nonlocal call_count
+            mp = MagicMock()
+            mp.returncode = 0
+            mp.stdout = responses[call_count] + "\n"
+            mp.stderr = ""
+            call_count += 1
+            return mp
 
-        # Restore with different scope arg (should use backup's "User" scope)
-        cmd_path.restore_path(scope="Machine")
+        mock_run.side_effect = side_effect
+
+        cmd_path.backup_path()
+        cmd_path.backup_path()
+        cmd_path.backup_path()
+
+        files = sorted(tmp_path.glob("path_backup_*.json"))
+        assert len(files) == 3, f"Expected 3 backup files, got {len(files)}: {files}"
+
+    @patch("subprocess.run")
+    def test_restore_at_index_picks_correct_backup(self, mock_run: MagicMock, tmp_path: Path) -> None:
+        """restore_at_index(1) restores the second-newest backup."""
+        call_count: int = 0
+        responses: list[str] = ["C:\\Oldest", "C:\\Middle", "C:\\Newest"]
+
+        def side_effect(*args: object, **kwargs: object) -> MagicMock:
+            nonlocal call_count
+            mp = MagicMock()
+            mp.returncode = 0
+            mp.stdout = responses[call_count] + "\n"
+            mp.stderr = ""
+            call_count += 1
+            return mp
+
+        mock_run.side_effect = side_effect
+
+        cmd_path.backup_path()  # Oldest
+        cmd_path.backup_path()  # Middle
+        cmd_path.backup_path()  # Newest
+
+        mock_run.reset_mock()
+        mock_run.side_effect = None
+        # Set a fresh return_value for the auto-backup + set_path calls
+        fresh_process = MagicMock()
+        fresh_process.returncode = 0
+        fresh_process.stdout = "C:\\Dummy\n"
+        fresh_process.stderr = ""
+        mock_run.return_value = fresh_process
+
+        # Restore the middle one (index 1 = second newest in sorted order)
+        cmd_path.restore_at_index(1)
 
         last_call = mock_run.call_args
         command_str = " ".join(last_call[0][0])
-        assert "User" in command_str, f"Should use 'User' scope from backup: {command_str}"
+        assert "C:\\Middle" in command_str
 
     @patch("subprocess.run")
-    def test_auto_backup_before_set_path(self, mock_run: MagicMock, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.chdir(tmp_path)
-        # First call to get_path for the backup
+    def test_restore_at_index_raises_on_bad_index(self, mock_run: MagicMock) -> None:
+        mock_process = MagicMock()
+        mock_process.returncode = 0
+        mock_process.stdout = "C:\\Test\n"
+        mock_process.stderr = ""
+        mock_run.return_value = mock_process
+
+        cmd_path.backup_path()
+
+        with pytest.raises(IndexError, match="out of range"):
+            cmd_path.restore_at_index(99)
+
+        with pytest.raises(IndexError, match="out of range"):
+            cmd_path.restore_at_index(-1)
+
+    @patch("subprocess.run")
+    def test_auto_backup_before_set_path(self, mock_run: MagicMock, tmp_path: Path) -> None:
         mock_process = MagicMock()
         mock_process.returncode = 0
         mock_process.stdout = "C:\\BeforeChange\n"
@@ -530,17 +584,14 @@ class TestBackupPath:
 
         cmd_path.set_path("C:\\NewPath")
 
-        backup_file = tmp_path / "path_backup.txt"
-        assert backup_file.exists()
+        files = list(tmp_path.glob("path_backup_*.json"))
+        assert len(files) >= 1
         import json
-        data = json.loads(backup_file.read_text(encoding="utf-8"))
+        data = json.loads(files[0].read_text(encoding="utf-8"))
         assert data["path"] == "C:\\BeforeChange"
 
     @patch("subprocess.run")
-    def test_auto_backup_before_clear_path(self, mock_run: MagicMock, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.chdir(tmp_path)
-        # First get_path for backup returns original
-        # Second set_path with empty string is for the actual clear
+    def test_auto_backup_before_clear_path(self, mock_run: MagicMock, tmp_path: Path) -> None:
         mock_process = MagicMock()
         mock_process.returncode = 0
         mock_process.stdout = "C:\\ToBeCleared\n"
@@ -549,10 +600,10 @@ class TestBackupPath:
 
         cmd_path.clear_path(confirm=True)
 
-        backup_file = tmp_path / "path_backup.txt"
-        assert backup_file.exists()
+        files = list(tmp_path.glob("path_backup_*.json"))
+        assert len(files) >= 1
         import json
-        data = json.loads(backup_file.read_text(encoding="utf-8"))
+        data = json.loads(files[0].read_text(encoding="utf-8"))
         assert data["path"] == "C:\\ToBeCleared"
 
 
@@ -880,17 +931,16 @@ class TestBackupPathUnix(UnixMixin):
     """backup_path and restore_path on Unix / macOS."""
 
     def test_backup_saves_current_path_to_file(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.chdir(tmp_path)
         monkeypatch.setenv("PATH", "/usr/bin:/bin:/usr/local/bin")
 
         result = cmd_path.backup_path()
 
         assert result == "/usr/bin:/bin:/usr/local/bin"
-        backup_file = tmp_path / "path_backup.txt"
-        assert backup_file.exists()
+        files = list(tmp_path.glob("path_backup_*.json"))
+        assert len(files) == 1, f"Expected 1 backup file, got {len(files)}"
 
         import json
-        data = json.loads(backup_file.read_text(encoding="utf-8"))
+        data = json.loads(files[0].read_text(encoding="utf-8"))
         assert data["path"] == "/usr/bin:/bin:/usr/local/bin"
         assert "timestamp" in data
 
@@ -900,47 +950,187 @@ class TestBackupPathUnix(UnixMixin):
         assert result == "/opt/myapp/bin"
 
     def test_restore_raises_when_no_backup(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.chdir(tmp_path)
         with pytest.raises(FileNotFoundError, match="No PATH backup"):
             cmd_path.restore_path()
 
     def test_restore_sets_path_from_backup(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.chdir(tmp_path)
         monkeypatch.setenv("PATH", "/usr/bin:/original/path")
 
         cmd_path.backup_path()
 
         # Modify PATH
-        cmd_path.set_path("/tmp/modified")
+        monkeypatch.setenv("PATH", "/tmp/modified")
 
-        # Restore
+        # Restore should bring back the saved value
         cmd_path.restore_path()
 
         assert os.environ["PATH"] == "/usr/bin:/original/path"
 
     def test_auto_backup_before_set_path(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.chdir(tmp_path)
         monkeypatch.setenv("PATH", "/usr/bin:/before/change")
 
         cmd_path.set_path("/new/path")
 
-        backup_file = tmp_path / "path_backup.txt"
-        assert backup_file.exists()
+        files = list(tmp_path.glob("path_backup_*.json"))
+        assert len(files) >= 1
         import json
-        data = json.loads(backup_file.read_text(encoding="utf-8"))
+        data = json.loads(files[-1].read_text(encoding="utf-8"))
         assert data["path"] == "/usr/bin:/before/change"
 
     def test_auto_backup_before_clear_path(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.chdir(tmp_path)
         monkeypatch.setenv("PATH", "/usr/bin:/tobe/cleared")
 
         cmd_path.clear_path(confirm=True)
 
-        backup_file = tmp_path / "path_backup.txt"
-        assert backup_file.exists()
+        files = list(tmp_path.glob("path_backup_*.json"))
+        assert len(files) >= 1
         import json
-        data = json.loads(backup_file.read_text(encoding="utf-8"))
+        data = json.loads(files[-1].read_text(encoding="utf-8"))
         assert data["path"] == "/usr/bin:/tobe/cleared"
+
+
+# ---------------------------------------------------------------------------
+# list_backups / restore_at_index / suggest_restore
+# ---------------------------------------------------------------------------
+
+
+class TestListBackups:
+    """Tests for ``list_backups()`` on Windows."""
+
+    @patch("subprocess.run")
+    def test_list_backups_empty_when_none_exist(self, mock_run: MagicMock) -> None:
+        result = cmd_path.list_backups()
+        assert result == []
+
+    @patch("subprocess.run")
+    def test_list_backups_returns_metadata(self, mock_run: MagicMock, tmp_path: Path) -> None:
+        mock_process = MagicMock()
+        mock_process.returncode = 0
+        mock_process.stdout = "C:\\Windows;C:\\Program Files\n"
+        mock_process.stderr = ""
+        mock_run.return_value = mock_process
+
+        cmd_path.backup_path()
+        backups = cmd_path.list_backups()
+        assert len(backups) == 1
+        assert backups[0]["path"] == "C:\\Windows;C:\\Program Files"
+        assert backups[0]["scope"] == "Machine"
+        assert "timestamp" in backups[0]
+        assert backups[0]["index"] == "0"
+
+    @patch("subprocess.run")
+    def test_multiple_backups_ordered_newest_first(
+        self, mock_run: MagicMock, tmp_path: Path
+    ) -> None:
+        call_count: int = 0
+        responses: list[str] = ["C:\\Old", "C:\\Middle", "C:\\Newest"]
+
+        def side_effect(*args: object, **kwargs: object) -> MagicMock:
+            nonlocal call_count
+            mp = MagicMock()
+            mp.returncode = 0
+            mp.stdout = responses[call_count] + "\n"
+            mp.stderr = ""
+            call_count += 1
+            return mp
+
+        mock_run.side_effect = side_effect
+
+        cmd_path.backup_path()  # Old
+        cmd_path.backup_path()  # Middle
+        cmd_path.backup_path()  # Newest
+
+        backups = cmd_path.list_backups()
+        # Since filenames sort lexicographically by timestamp (newer = later),
+        # the reverse sort puts Newest first
+        assert len(backups) == 3
+        # Verify ordering by index
+        assert int(backups[0]["index"]) == 0  # Newest
+        assert int(backups[1]["index"]) == 1
+        assert int(backups[2]["index"]) == 2  # Oldest
+
+    @patch("subprocess.run")
+    def test_restore_at_index_picks_correct_backup(
+        self, mock_run: MagicMock, tmp_path: Path
+    ) -> None:
+        call_count: int = 0
+        responses: list[str] = ["C:\\A", "C:\\B", "C:\\C"]
+
+        def side_effect(*args: object, **kwargs: object) -> MagicMock:
+            nonlocal call_count
+            mp = MagicMock()
+            mp.returncode = 0
+            mp.stdout = responses[call_count] + "\n"
+            mp.stderr = ""
+            call_count += 1
+            return mp
+
+        mock_run.side_effect = side_effect
+
+        cmd_path.backup_path()
+        cmd_path.backup_path()
+        cmd_path.backup_path()
+
+        mock_run.reset_mock()
+        mock_run.side_effect = None
+        # Set a fresh return_value for the auto-backup + set_path calls
+        fresh_process = MagicMock()
+        fresh_process.returncode = 0
+        fresh_process.stdout = "C:\\Dummy\n"
+        fresh_process.stderr = ""
+        mock_run.return_value = fresh_process
+
+        cmd_path.restore_at_index(1)
+
+        # Should restore the 2nd newest backup
+        # After sorting by filename (newest first), index 1 is the middle one
+        # which was "C:\\B"
+        last_call = mock_run.call_args
+        command_str = " ".join(last_call[0][0])
+        assert "C:\\B" in command_str
+
+    @patch("subprocess.run")
+    def test_suggest_restore_none_when_few_backups(
+        self, mock_run: MagicMock, tmp_path: Path
+    ) -> None:
+        """suggest_restore returns None with fewer than 3 backups."""
+        mock_process = MagicMock()
+        mock_process.returncode = 0
+        mock_process.stdout = "C:\\Windows\n"
+        mock_process.stderr = ""
+        mock_run.return_value = mock_process
+
+        cmd_path.backup_path()
+        cmd_path.backup_path()
+        assert cmd_path.suggest_restore() is None
+
+    @patch("subprocess.run")
+    def test_suggest_restore_returns_info_when_3_or_more(
+        self, mock_run: MagicMock, tmp_path: Path
+    ) -> None:
+        """suggest_restore returns dict with count/newest/oldest when >= 3."""
+        call_count: int = 0
+
+        def side_effect(*args: object, **kwargs: object) -> MagicMock:
+            nonlocal call_count
+            mp = MagicMock()
+            mp.returncode = 0
+            mp.stdout = f"C:\\Path{call_count}\n"
+            mp.stderr = ""
+            call_count += 1
+            return mp
+
+        mock_run.side_effect = side_effect
+
+        cmd_path.backup_path()
+        cmd_path.backup_path()
+        cmd_path.backup_path()
+
+        result = cmd_path.suggest_restore()
+        assert result is not None
+        assert result["count"] == 3
+        assert "time" in result["newest"] or "T" in result["newest"]
+        assert "time" in result["oldest"] or "T" in result["oldest"]
 
 
 # ---------------------------------------------------------------------------
@@ -990,7 +1180,6 @@ class TestDryRun:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.chdir(tmp_path)
-        backup_file = tmp_path / "path_backup.txt"
 
         # First back up for real to create a file
         with patch("subprocess.run") as mock_run:
@@ -1001,8 +1190,9 @@ class TestDryRun:
             mock_run.return_value = mock_process
             cmd_path.backup_path()
 
-        assert backup_file.exists()
-        real_mtime = backup_file.stat().st_mtime_ns
+        files_after_real = list(tmp_path.glob("path_backup_*.json"))
+        assert len(files_after_real) == 1
+        real_mtime = files_after_real[0].stat().st_mtime_ns
 
         # Now call backup_path again with dry_run=True
         with patch("subprocess.run") as mock_run:
@@ -1014,8 +1204,10 @@ class TestDryRun:
 
             cmd_path.backup_path(dry_run=True)
 
-        # The backup file should NOT have been overwritten
-        assert backup_file.stat().st_mtime_ns == real_mtime, (
+        # The backup file should NOT have been overwritten or added
+        files_after_dry = list(tmp_path.glob("path_backup_*.json"))
+        assert len(files_after_dry) == 1, "dry-run should not create new backup files"
+        assert files_after_dry[0].stat().st_mtime_ns == real_mtime, (
             "dry_run backup should not modify the backup file"
         )
 
@@ -1075,26 +1267,26 @@ class TestDryRunUnix(UnixMixin):
     def test_backup_path_dry_run_does_not_write_file(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        monkeypatch.chdir(tmp_path)
         monkeypatch.setenv("PATH", "/usr/bin:/first/path")
-        backup_file = tmp_path / "path_backup.txt"
 
         # Real backup
         cmd_path.backup_path()
-        assert backup_file.exists()
-        real_mtime = backup_file.stat().st_mtime_ns
+        files_after_real = list(tmp_path.glob("path_backup_*.json"))
+        assert len(files_after_real) == 1
+        real_mtime = files_after_real[0].stat().st_mtime_ns
 
         # Dry-run backup
         monkeypatch.setenv("PATH", "/usr/bin:/second/path")
         cmd_path.backup_path(dry_run=True)
 
-        # Should NOT have updated the file
-        assert backup_file.stat().st_mtime_ns == real_mtime
+        # Should NOT have created a new file or modified the existing one
+        files_after_dry = list(tmp_path.glob("path_backup_*.json"))
+        assert len(files_after_dry) == 1, "dry-run should not create new backup files"
+        assert files_after_dry[0].stat().st_mtime_ns == real_mtime
 
     def test_restore_path_dry_run_does_not_modify_os_environ(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        monkeypatch.chdir(tmp_path)
         monkeypatch.setenv("PATH", "/usr/bin:/original")
 
         # Create backup
