@@ -118,6 +118,29 @@ def get_path(scope: str = "Machine") -> str:
 # ---------------------------------------------------------------------------
 
 
+def _validate_path_not_empty(new_path: str, sep: str) -> None:
+    """Raise ``ValueError`` if *new_path* would effectively delete PATH.
+
+    Guards against accidentally wiping the environment variable by
+    passing an empty string, whitespace, or a string that contains only
+    PATH separators (``;`` / ``:``).
+    """
+    stripped = new_path.strip()
+    if not stripped:
+        raise ValueError(
+            "Refusing to set PATH to an empty value. "
+            "Use clear_path(confirm=True) if you intend to clear it."
+        )
+    # Check if the string is nothing but separators (e.g. ";;;" or "::")
+    only_seps = all(ch in (sep + " \t\n\r") for ch in stripped)
+    if only_seps:
+        raise ValueError(
+            "Refusing to set PATH to a value that contains only PATH "
+            f"separators ('{sep}'). "
+            "Use clear_path(confirm=True) if you intend to clear it."
+        )
+
+
 def set_path(new_path: str, scope: str = "Machine") -> None:
     """Set ``PATH`` to *new_path*.
 
@@ -130,8 +153,14 @@ def set_path(new_path: str, scope: str = "Machine") -> None:
         scope: ``"Machine"`` or ``"User"`` (Windows only; ignored on Unix).
 
     Raises:
+        ValueError:
+            If *new_path* is empty, whitespace-only, or contains only PATH
+            separators (would effectively delete the environment variable).
         ValueError: If the underlying command fails.
     """
+    sep = _get_sep()
+    _validate_path_not_empty(new_path, sep)
+
     if _IS_WINDOWS:
         escaped = new_path.replace('"', '\\"')
         command: list[str] = [
@@ -168,18 +197,29 @@ def save_path_to_file(
 # ---------------------------------------------------------------------------
 
 
-def clear_path(scope: str = "Machine") -> None:
+def clear_path(scope: str = "Machine", *, confirm: bool = False) -> None:
     """Set ``PATH`` to an empty string.
 
     .. warning::
-        This removes **all** paths from the environment variable.
+        This removes **all** paths from the environment variable and can
+        break system functionality.  You **must** pass ``confirm=True`` to
+        execute this operation.
 
     Args:
         scope: ``"Machine"`` or ``"User"`` (Windows only; ignored on Unix).
+        confirm: Pass ``True`` to acknowledge the destructive nature of
+                 this operation.  Raises ``ValueError`` if ``False``.
 
     Raises:
+        ValueError: If *confirm* is not ``True``.
         ValueError: If the underlying command fails.
     """
+    if not confirm:
+        raise ValueError(
+            "Refusing to clear PATH without explicit confirmation. "
+            "Pass confirm=True to acknowledge this destructive operation."
+        )
+
     if _IS_WINDOWS:
         command: list[str] = [
             "powershell", "-Command",

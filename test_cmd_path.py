@@ -179,7 +179,7 @@ class TestClearPath:
         mock_process.returncode = 0
         mock_run.return_value = mock_process
 
-        cmd_path.clear_path()
+        cmd_path.clear_path(confirm=True)
         mock_run.assert_called_once()
 
     @patch("subprocess.run")
@@ -190,7 +190,7 @@ class TestClearPath:
         mock_run.return_value = mock_process
 
         with pytest.raises(ValueError, match="Failed to clear PATH"):
-            cmd_path.clear_path()
+            cmd_path.clear_path(confirm=True)
 
 
 # ---------------------------------------------------------------------------
@@ -275,6 +275,120 @@ class TestAddToPath:
         mock_get_path.return_value = "C:\\Windows"
         with pytest.raises(ValueError, match="No valid paths"):
             cmd_path.add_to_path(";;;")
+
+
+# ---------------------------------------------------------------------------
+# Protection: set_path rejects empty / separator-only values
+# ---------------------------------------------------------------------------
+
+
+class TestSetPathProtection:
+    """``set_path`` must refuse values that would effectively delete PATH."""
+
+    def test_rejects_empty_string(self) -> None:
+        with pytest.raises(ValueError, match="empty value"):
+            cmd_path.set_path("")
+
+    def test_rejects_whitespace_only(self) -> None:
+        with pytest.raises(ValueError, match="empty value"):
+            cmd_path.set_path("   \t\n")
+
+    def test_rejects_only_separators(self) -> None:
+        with pytest.raises(ValueError, match="separators"):
+            cmd_path.set_path(";;;")
+
+    def test_rejects_mixed_separators_and_whitespace(self) -> None:
+        with pytest.raises(ValueError, match="separators"):
+            cmd_path.set_path(" ; ; \n")
+
+    @patch("subprocess.run")
+    def test_accepts_valid_path(self, mock_run: MagicMock) -> None:
+        mock_process = MagicMock()
+        mock_process.returncode = 0
+        mock_run.return_value = mock_process
+
+        # Should not raise
+        cmd_path.set_path("C:\\Windows")
+        mock_run.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# Protection: clear_path requires explicit confirm flag
+# ---------------------------------------------------------------------------
+
+
+class TestClearPathProtection:
+    """``clear_path`` must refuse without an explicit ``confirm=True``."""
+
+    @patch("subprocess.run")
+    def test_refuses_without_confirm(self, mock_run: MagicMock) -> None:
+        with pytest.raises(ValueError, match="confirm"):
+            cmd_path.clear_path()
+        mock_run.assert_not_called()
+
+    @patch("subprocess.run")
+    def test_refuses_with_explicit_false(self, mock_run: MagicMock) -> None:
+        with pytest.raises(ValueError, match="confirm"):
+            cmd_path.clear_path(confirm=False)
+        mock_run.assert_not_called()
+
+    @patch("subprocess.run")
+    def test_accepts_with_confirm_true(self, mock_run: MagicMock) -> None:
+        mock_process = MagicMock()
+        mock_process.returncode = 0
+        mock_run.return_value = mock_process
+
+        cmd_path.clear_path(confirm=True)
+        mock_run.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# Protection: add_to_path must never accidentally wipe PATH
+# ---------------------------------------------------------------------------
+
+
+class TestAddToPathProtection:
+    """``add_to_path`` must not be able to produce an empty result."""
+
+    @patch("cmd_path.get_path")
+    def test_cannot_add_all_separators(self, mock_get_path: MagicMock) -> None:
+        mock_get_path.return_value = "C:\\Windows"
+        with pytest.raises(ValueError, match="No valid paths"):
+            cmd_path.add_to_path(";;;")
+
+    @patch("cmd_path.get_path")
+    def test_cannot_add_all_whitespace(self, mock_get_path: MagicMock) -> None:
+        mock_get_path.return_value = "C:\\Windows"
+        with pytest.raises(ValueError, match="Cannot add an empty path"):
+            cmd_path.add_to_path("   \t\n")
+
+    @patch("cmd_path.get_path")
+    def test_raises_on_empty_path(self, mock_get_path: MagicMock) -> None:
+        mock_get_path.return_value = "C:\\Windows"
+        with pytest.raises(ValueError, match="Cannot add an empty path"):
+            cmd_path.add_to_path("")
+
+    @patch("cmd_path.get_path")
+    def test_cannot_wipe_existing_by_adding_nothing(self, mock_get_path: MagicMock) -> None:
+        """Even if the current path is also empty, add_to_path must raise."""
+        mock_get_path.return_value = ""
+        with pytest.raises(ValueError, match="Cannot add an empty path"):
+            cmd_path.add_to_path("")
+
+    @patch("cmd_path.get_path")
+    @patch("cmd_path.set_path")
+    def test_never_calls_set_path_with_separator_only(
+        self,
+        mock_set_path: MagicMock,
+        mock_get_path: MagicMock,
+    ) -> None:
+        """If the current path is empty but valid entries are added."""
+        mock_get_path.return_value = ""
+        cmd_path.add_to_path("C:\\NewApp")
+        mock_set_path.assert_called_once()
+        # Must not be just separators
+        args, _ = mock_set_path.call_args
+        assert args[0].strip(";"), f"PATH should not be empty: {args[0]!r}"
 
 
 # ---------------------------------------------------------------------------
@@ -385,7 +499,7 @@ class TestClearPathUnix(UnixMixin):
 
     def test_clears_os_environ(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("PATH", "/usr/bin:/bin")
-        cmd_path.clear_path()
+        cmd_path.clear_path(confirm=True)
         assert os.environ["PATH"] == ""
 
 
@@ -421,3 +535,102 @@ class TestAddToPathUnix(UnixMixin):
     def test_empty_path_raises(self) -> None:
         with pytest.raises(ValueError, match="Cannot add an empty path"):
             cmd_path.add_to_path("")
+
+
+# ---------------------------------------------------------------------------
+# Protection: set_path rejects empty / separator-only (Unix)
+# ---------------------------------------------------------------------------
+
+
+class TestSetPathProtectionUnix(UnixMixin):
+    """``set_path`` safety guards on Unix / macOS (uses ``:`` separator)."""
+
+    def test_rejects_empty_string(self) -> None:
+        with pytest.raises(ValueError, match="empty value"):
+            cmd_path.set_path("")
+
+    def test_rejects_whitespace_only(self) -> None:
+        with pytest.raises(ValueError, match="empty value"):
+            cmd_path.set_path("   \t\n")
+
+    def test_rejects_only_separators_unix(self) -> None:
+        with pytest.raises(ValueError, match="separators"):
+            cmd_path.set_path(":::")
+
+    def test_rejects_mixed_separators_and_whitespace_unix(self) -> None:
+        with pytest.raises(ValueError, match="separators"):
+            cmd_path.set_path(" : : \n")
+
+    def test_accepts_valid_path_unix(self) -> None:
+        # Should not raise
+        cmd_path.set_path("/usr/bin:/usr/local/bin")
+        assert os.environ["PATH"] == "/usr/bin:/usr/local/bin"
+
+
+# ---------------------------------------------------------------------------
+# Protection: clear_path requires explicit confirm (Unix)
+# ---------------------------------------------------------------------------
+
+
+class TestClearPathProtectionUnix(UnixMixin):
+    """``clear_path`` safety guards on Unix / macOS."""
+
+    def test_refuses_without_confirm(self) -> None:
+        with pytest.raises(ValueError, match="confirm"):
+            cmd_path.clear_path()
+
+    def test_refuses_with_explicit_false(self) -> None:
+        with pytest.raises(ValueError, match="confirm"):
+            cmd_path.clear_path(confirm=False)
+
+    def test_accepts_with_confirm_true(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("PATH", "/usr/bin")
+        cmd_path.clear_path(confirm=True)
+        assert os.environ["PATH"] == ""
+
+
+# ---------------------------------------------------------------------------
+# Protection: add_to_path must never accidentally wipe PATH (Unix)
+# ---------------------------------------------------------------------------
+
+
+class TestAddToPathProtectionUnix(UnixMixin):
+    """``add_to_path`` safety guards on Unix / macOS."""
+
+    @patch("cmd_path.get_path")
+    def test_cannot_add_all_separators_unix(self, mock_get_path: MagicMock) -> None:
+        mock_get_path.return_value = "/usr/bin"
+        with pytest.raises(ValueError, match="No valid paths"):
+            cmd_path.add_to_path(":::")
+
+    @patch("cmd_path.get_path")
+    def test_cannot_add_all_whitespace(self, mock_get_path: MagicMock) -> None:
+        mock_get_path.return_value = "/usr/bin"
+        with pytest.raises(ValueError, match="Cannot add an empty path"):
+            cmd_path.add_to_path("   \t\n")
+
+    @patch("cmd_path.get_path")
+    def test_raises_on_empty_path_unix(self, mock_get_path: MagicMock) -> None:
+        mock_get_path.return_value = "/usr/bin"
+        with pytest.raises(ValueError, match="Cannot add an empty path"):
+            cmd_path.add_to_path("")
+
+    @patch("cmd_path.get_path")
+    def test_cannot_wipe_existing_by_adding_nothing_unix(self, mock_get_path: MagicMock) -> None:
+        mock_get_path.return_value = ""
+        with pytest.raises(ValueError, match="Cannot add an empty path"):
+            cmd_path.add_to_path("")
+
+    @patch("cmd_path.get_path")
+    @patch("cmd_path.set_path")
+    def test_never_calls_set_path_with_separator_only_unix(
+        self,
+        mock_set_path: MagicMock,
+        mock_get_path: MagicMock,
+    ) -> None:
+        """If current PATH is empty but valid entries are added."""
+        mock_get_path.return_value = ""
+        cmd_path.add_to_path("/opt/newapp")
+        mock_set_path.assert_called_once()
+        args, _ = mock_set_path.call_args
+        assert args[0].strip(":"), f"PATH should not be empty: {args[0]!r}"
