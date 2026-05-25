@@ -17,6 +17,18 @@ import pytest
 import cmd_path
 
 
+@pytest.fixture(autouse=True)
+def _patch_windows(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Force Windows code paths for all tests in this file.
+
+    ``cmd_path._IS_WINDOWS`` controls whether the module uses PowerShell
+    (Windows) or ``os.environ`` / shell config (Unix).  On non-Windows CI
+    runners we want to test the PowerShell code paths, so we set the flag
+    to ``True`` for every test.
+    """
+    monkeypatch.setattr(cmd_path, "_IS_WINDOWS", True)
+
+
 # ---------------------------------------------------------------------------
 # check_admin
 # ---------------------------------------------------------------------------
@@ -127,7 +139,7 @@ class TestSetPath:
 
         # Verify the escaped version is in the command
         command_str = " ".join(mock_run.call_args[0][0])
-        assert '\\\\"' in command_str or 'My\\\"App' in command_str
+        assert '\\\\"' in command_str or 'My\\"App' in command_str
 
 
 # ---------------------------------------------------------------------------
@@ -259,7 +271,7 @@ class TestAddToPath:
 
     @patch("cmd_path.get_path")
     def test_raises_on_no_valid_paths(self, mock_get_path: MagicMock) -> None:
-        mock_get_path.return_value = "C:\Windows"
+        mock_get_path.return_value = "C:\\Windows"
         with pytest.raises(ValueError, match="No valid paths"):
             cmd_path.add_to_path(";;;")
 

@@ -7,7 +7,6 @@ wire up specific return values.
 Run with: pytest test_gui_command.py -v
 """
 
-import os
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -16,11 +15,9 @@ import pytest
 import gui_command
 from state import state
 
-
-# ---------------------------------------------------------------------------
-# Fixtures
-# ---------------------------------------------------------------------------
-
+# GUI uses ";" as the internal path-list file delimiter (always, not
+# platform-dependent).  Test data must use the same separator.
+_SEP = ";"
 
 
 @pytest.fixture
@@ -37,7 +34,7 @@ def patch_cmd_path(monkeypatch: pytest.MonkeyPatch) -> dict[str, MagicMock]:
     import cmd_path
 
     mocks = {
-        "get_path": MagicMock(return_value="C:\\Windows;C:\\Program Files"),
+        "get_path": MagicMock(return_value=f"C:\\Windows{_SEP}C:\\Program Files"),
         "add_to_path": MagicMock(),
         "set_path": MagicMock(),
         "save_path_to_file": MagicMock(),
@@ -56,6 +53,7 @@ class TestRelativeToAssets:
     def test_returns_path_under_assets(self) -> None:
         result = gui_command.relative_to_assets("button_1.png")
         # Use os.sep for cross-platform path matching (\ on Windows, / on macOS)
+        import os
         expected_suffix = f"assets{os.sep}frame0{os.sep}button_1.png"
         assert str(result).endswith(expected_suffix)
 
@@ -186,7 +184,7 @@ class TestOpenPathEditor:
 
         # Create the path list file in the temp (now current) directory
         path_list = Path("path_list.txt")
-        content = f"C:\\Windows;{old_path};C:\\Other;"
+        content = f"C:\\Windows{_SEP}{old_path}{_SEP}C:\\Other{_SEP}"
         path_list.write_text(content, encoding="utf-8")
 
         # Create asset files
@@ -236,7 +234,7 @@ class TestOpenPathEditor:
         """Submit writes the updated paths back to the file."""
         monkeypatch.chdir(tmp_path)
         path_list = Path("path_list.txt")
-        old_content = "C:\\Windows;C:\\Old\\Path;C:\\Other;"
+        old_content = f"C:\\Windows{_SEP}C:\\Old\\Path{_SEP}C:\\Other{_SEP}"
         path_list.write_text(old_content, encoding="utf-8")
 
         state.selected_path = "C:\\Old\\Path"
@@ -269,7 +267,7 @@ class TestOpenPathEditor:
     def test_submit_empty_path_shows_error(self, tmp_path: Path) -> None:
         """Submitting an empty path should show an error."""
         path_list = tmp_path / "path_list.txt"
-        path_list.write_text("C:\\Windows;C:\\Old;", encoding="utf-8")
+        path_list.write_text(f"C:\\Windows{_SEP}C:\\Old{_SEP}", encoding="utf-8")
 
         state.selected_path = "C:\\Old"
         assets_dir = tmp_path / "assets" / "frame0"
@@ -369,7 +367,8 @@ class TestCreateScrollablePathList:
         """Verify paths are parsed from the file and inserted into the listbox."""
         path_list = Path("path_list.txt")
         path_list.write_text(
-            "C:\\Windows;C:\\Program Files;C:\\MyApp;", encoding="utf-8"
+            f"C:\\Windows{_SEP}C:\\Program Files{_SEP}C:\\MyApp{_SEP}",
+            encoding="utf-8",
         )
 
         with patch("gui_command.Listbox") as mock_listbox_cls:
@@ -395,7 +394,7 @@ class TestCreateScrollablePathList:
     ) -> None:
         """When reading the path file fails, show an error."""
         path_list = Path("path_list.txt")
-        path_list.write_text("C:\\Windows;", encoding="utf-8")
+        path_list.write_text(f"C:\\Windows{_SEP}", encoding="utf-8")
 
         with (
             patch.object(Path, "read_text", side_effect=PermissionError("denied")),
@@ -413,7 +412,8 @@ class TestCreateScrollablePathList:
         """Simulate clicking on an item in the listbox."""
         path_list = Path("path_list.txt")
         path_list.write_text(
-            "C:\\Windows;C:\\Program Files;", encoding="utf-8"
+            f"C:\\Windows{_SEP}C:\\Program Files{_SEP}",
+            encoding="utf-8",
         )
 
         # Capture the callback that gets bound to <<ListboxSelect>>
