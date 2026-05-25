@@ -1,67 +1,168 @@
-import os
 import subprocess
 import ctypes
 import sys
+from pathlib import Path
 
-def check_admin():
+
+def check_admin() -> bool:
     """Check if the script is run as an administrator."""
-    if not ctypes.windll.shell32.IsUserAnAdmin():
+    try:
+        return bool(ctypes.windll.shell32.IsUserAnAdmin())
+    except AttributeError:
         return False
-    return True
 
-def get_path():
-    """Retrieve the current PATH variable using PowerShell."""
-    command = [
+
+def get_path(scope: str = "Machine") -> str:
+    """
+    Retrieve the current PATH environment variable using PowerShell.
+
+    Args:
+        scope: "Machine" for system-wide or "User" for user-specific PATH.
+
+    Returns:
+        The PATH string.
+
+    Raises:
+        ValueError: If the PowerShell command fails.
+    """
+    command: list[str] = [
         "powershell", "-Command",
-        "[System.Environment]::GetEnvironmentVariable('Path', 'Machine')"
+        f"[System.Environment]::GetEnvironmentVariable('Path', '{scope}')"
     ]
-    result = subprocess.run(command, capture_output=True, text=True)
+    result: subprocess.CompletedProcess = subprocess.run(
+        command, capture_output=True, text=True
+    )
     if result.returncode == 0:
         return result.stdout.strip()
     else:
-        raise ValueError(f"Failed to retrieve PATH variable. Error: {result.stderr.strip()}")
+        raise ValueError(
+            f"Failed to retrieve PATH variable. Error: {result.stderr.strip()}"
+        )
 
-def save_path_to_file(path_string, file_name="path_list.txt"):
+
+def set_path(new_path: str, scope: str = "Machine") -> None:
+    """
+    Set the PATH environment variable to the given value using PowerShell.
+
+    Args:
+        new_path: The full PATH string to set.
+        scope: "Machine" for system-wide or "User" for user-specific PATH.
+
+    Raises:
+        ValueError: If the PowerShell command fails.
+    """
+    # Escape double quotes in the path for PowerShell
+    escaped_path: str = new_path.replace('"', '\\"')
+    command: list[str] = [
+        "powershell", "-Command",
+        f"[System.Environment]::SetEnvironmentVariable('Path', \"{escaped_path}\", '{scope}')"
+    ]
+    result: subprocess.CompletedProcess = subprocess.run(
+        command, capture_output=True, text=True
+    )
+    if result.returncode != 0:
+        raise ValueError(
+            f"Failed to set PATH variable. Error: {result.stderr.strip()}"
+        )
+
+
+def save_path_to_file(
+    path_string: str, file_name: str = "path_list.txt"
+) -> None:
     """Save the full PATH string to a .txt file."""
-    with open(file_name, "w", encoding="utf-8") as f:
-        f.write(path_string)
+    path: Path = Path(file_name)
+    path.write_text(path_string, encoding="utf-8")
     print(f"PATH variable saved to '{file_name}'.")
 
-def clear_path():
-    command = [
+
+def clear_path(scope: str = "Machine") -> None:
+    """
+    Clear the PATH environment variable (DANGEROUS: sets PATH to empty).
+
+    Warning: This will remove ALL paths from the environment variable.
+    Use with extreme caution.
+
+    Args:
+        scope: "Machine" for system-wide or "User" for user-specific PATH.
+
+    Raises:
+        ValueError: If the PowerShell command fails.
+    """
+    command: list[str] = [
         "powershell", "-Command",
-        f"[System.Environment]::SetEnvironmentVariable('Path', '', 'Machine')"
+        f"[System.Environment]::SetEnvironmentVariable('Path', '', '{scope}')"
     ]
-    result = subprocess.run(command, capture_output=True, text=True)
-    pass
+    result: subprocess.CompletedProcess = subprocess.run(
+        command, capture_output=True, text=True
+    )
+    if result.returncode != 0:
+        raise ValueError(
+            f"Failed to clear PATH variable. Error: {result.stderr.strip()}"
+        )
 
-def add_to_path(new_path, system_wide=True):
-    """Add a new path to the PATH environment variable using PowerShell."""
-    current_path = get_path()
 
-    # Check if the new path is already in the PATH variable
-    if new_path in current_path:
-        print(f"The path '{new_path}' is already in the PATH variable.")
+def add_to_path(new_path: str, system_wide: bool = True) -> None:
+    """
+    Add a new path to the PATH environment variable using PowerShell.
+
+    Args:
+        new_path: The directory path to add to PATH. Can be a single path
+                  or a semicolon-separated string of paths.
+        system_wide: If True, modifies the Machine-level PATH.
+                     If False, modifies the User-level PATH.
+
+    Raises:
+        ValueError: If the PowerShell command fails or the path is invalid.
+    """
+    if not new_path or not new_path.strip():
+        raise ValueError("Cannot add an empty path to PATH.")
+
+    scope: str = "Machine" if system_wide else "User"
+    current_path: str = get_path(scope)
+
+    # Split existing paths into individual entries for duplicate checking
+    existing_entries: list[str] = [
+        p.strip() for p in current_path.split(";") if p.strip()
+    ]
+
+    # Split the new path(s) into individual entries
+    new_entries: list[str] = [
+        p.strip() for p in new_path.split(";") if p.strip()
+    ]
+
+    if not new_entries:
+        raise ValueError("No valid paths to add.")
+
+    # Check which entries are already present
+    already_present: list[str] = [
+        e for e in new_entries if e in existing_entries
+    ]
+    entries_to_add: list[str] = [
+        e for e in new_entries if e not in existing_entries
+    ]
+
+    if not entries_to_add:
+        print(
+            f"All path(s) are already in the PATH variable: {', '.join(already_present)}"
+        )
         return
 
-    # Determine the scope: 'Machine' for system-wide, 'User' for user-specific
-    scope = "Machine" if system_wide else "User"
-
     # Construct the new PATH value
-    updated_path = f"{current_path};{new_path}"
+    all_entries: list[str] = existing_entries + entries_to_add
+    updated_path: str = ";".join(all_entries) + ";"
 
-    # Set the updated PATH variable using PowerShell
-    command = [
-        "powershell", "-Command",
-        f"[System.Environment]::SetEnvironmentVariable('Path', \"{updated_path}\", '{scope}')"
-    ]
-    result = subprocess.run(command, capture_output=True, text=True)
+    # Set the updated PATH variable using the set_path helper
+    set_path(updated_path, scope)
 
-    # Check for success
-    if result.returncode == 0:
-        print(f"The path '{new_path}' has been added to the {'system' if system_wide else 'user'} PATH variable.")
-    else:
-        print(f"Failed to add the path. Error: {result.stderr.strip()}")
+    print(
+        f"The path(s) '{'; '.join(entries_to_add)}' have been added to the "
+        f"{'system' if system_wide else 'user'} PATH variable."
+    )
+    if already_present:
+        print(
+            f"The following path(s) were already present: {', '.join(already_present)}"
+        )
+
 
 if __name__ == "__main__":
     # Check if the script is run as an administrator
@@ -70,12 +171,12 @@ if __name__ == "__main__":
         sys.exit(1)
 
     # Retrieve the current PATH
-    full_path_string = get_path()
+    full_path_string: str = get_path()
 
     # Save the PATH to a file
     save_path_to_file(full_path_string)
 
     # Check if a custom path is passed as an argument
     if len(sys.argv) > 1:
-        custom_path = sys.argv[1]
-        add_to_path(custom_path, system_wide=True)  # Set `system_wide=False` for user-specific PATH updates
+        custom_path: str = sys.argv[1]
+        add_to_path(custom_path, system_wide=True)
