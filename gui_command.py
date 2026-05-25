@@ -1,6 +1,15 @@
 from tkinter import (
-    Canvas, Button, PhotoImage, Frame, Listbox,
-    SINGLE, messagebox, Entry, StringVar, Label, Toplevel,
+    Canvas,
+    Button,
+    PhotoImage,
+    Frame,
+    Listbox,
+    SINGLE,
+    messagebox,
+    Entry,
+    StringVar,
+    Label,
+    Toplevel,
 )
 from pathlib import Path
 import cmd_path
@@ -25,7 +34,9 @@ def create_new_dir() -> None:
     selected_directory: str = askdirectory(title="Select a Folder")
 
     if not selected_directory:
-        messagebox.showinfo("No Folder Selected", "Please select a folder to add to the PATH.")
+        messagebox.showinfo(
+            "No Folder Selected", "Please select a folder to add to the PATH."
+        )
         return
 
     # Ask for confirmation before modifying the system PATH
@@ -116,7 +127,9 @@ def open_path_editor() -> None:
             paths: list[str] = [p for p in path_content.split(_SEP) if p]
 
             if state.selected_path not in paths:
-                raise ValueError(f"Selected path '{state.selected_path}' not found in the file.")
+                raise ValueError(
+                    f"Selected path '{state.selected_path}' not found in the file."
+                )
 
             # Replace the old path with the new one
             paths = [new_path if p == state.selected_path else p for p in paths]

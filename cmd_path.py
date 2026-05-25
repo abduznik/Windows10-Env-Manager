@@ -30,6 +30,7 @@ _BACKUP_SUFFIX = ".json"
 def _appdata_dir() -> Path:
     """Lazy-import of utils.get_appdata_dir to avoid circular imports."""
     from utils import get_appdata_dir as _get_appdata_dir
+
     return _get_appdata_dir()
 
 
@@ -112,13 +113,15 @@ def list_backups() -> list[dict[str, str]]:
         try:
             data = json.loads(fp.read_text(encoding="utf-8"))
             ts_raw = _parse_backup_timestamp(fp.name)
-            result.append({
-                "index": str(idx),
-                "timestamp": ts_raw,
-                "path": data.get("path", "")[:80],
-                "scope": data.get("scope", "Machine"),
-                "filename": fp.name,
-            })
+            result.append(
+                {
+                    "index": str(idx),
+                    "timestamp": ts_raw,
+                    "path": data.get("path", "")[:80],
+                    "scope": data.get("scope", "Machine"),
+                    "filename": fp.name,
+                }
+            )
         except (json.JSONDecodeError, OSError):
             continue
     return result
@@ -146,18 +149,12 @@ def restore_at_index(index: int, *, dry_run: bool = False) -> None:
 
     fp = files[index]
     try:
-        backup: dict[str, str] = json.loads(
-            fp.read_text(encoding="utf-8")
-        )
+        backup: dict[str, str] = json.loads(fp.read_text(encoding="utf-8"))
     except json.JSONDecodeError as exc:
-        raise ValueError(
-            f"Backup file '{fp.name}' is corrupted: {exc}"
-        ) from exc
+        raise ValueError(f"Backup file '{fp.name}' is corrupted: {exc}") from exc
 
     if "path" not in backup:
-        raise ValueError(
-            f"Backup file '{fp.name}' is missing the 'path' field."
-        )
+        raise ValueError(f"Backup file '{fp.name}' is missing the 'path' field.")
 
     saved_path: str = backup["path"]
     saved_scope: str = backup.get("scope", "Machine")
@@ -209,7 +206,7 @@ def _update_shell_config(new_path: str) -> None:
     accumulate stale entries.
     """
     rc = _get_shell_rc_path()
-    export_line = f"export PATH=\"{new_path}\"\n"
+    export_line = f'export PATH="{new_path}"\n'
 
     if rc.exists():
         lines = rc.read_text(encoding="utf-8").splitlines(keepends=True)
@@ -257,9 +254,7 @@ def backup_path(scope: str = "Machine", *, dry_run: bool = False) -> str:
         "path": current,
         "timestamp": datetime.now().isoformat(),
     }
-    backup_file.write_text(
-        json.dumps(backup, indent=2), encoding="utf-8"
-    )
+    backup_file.write_text(json.dumps(backup, indent=2), encoding="utf-8")
     return current
 
 
@@ -315,6 +310,7 @@ def check_admin() -> bool:
     try:
         if _IS_WINDOWS:
             import ctypes
+
             return bool(ctypes.windll.shell32.IsUserAnAdmin())
         return os.geteuid() == 0
     except (AttributeError, OSError):
@@ -337,7 +333,8 @@ def get_path(scope: str = "Machine") -> str:
     """
     if _IS_WINDOWS:
         command: list[str] = [
-            "powershell", "-Command",
+            "powershell",
+            "-Command",
             f"[System.Environment]::GetEnvironmentVariable('Path', '{scope}')",
         ]
         result: subprocess.CompletedProcess = subprocess.run(
@@ -416,7 +413,8 @@ def set_path(new_path: str, scope: str = "Machine", *, dry_run: bool = False) ->
     if _IS_WINDOWS:
         escaped = new_path.replace('"', '\\"')
         command: list[str] = [
-            "powershell", "-Command",
+            "powershell",
+            "-Command",
             f"[System.Environment]::SetEnvironmentVariable('Path', \"{escaped}\", '{scope}')",
         ]
         result: subprocess.CompletedProcess = subprocess.run(
@@ -436,9 +434,7 @@ def set_path(new_path: str, scope: str = "Machine", *, dry_run: bool = False) ->
 # ---------------------------------------------------------------------------
 
 
-def save_path_to_file(
-    path_string: str, file_name: str = "path_list.txt"
-) -> None:
+def save_path_to_file(path_string: str, file_name: str = "path_list.txt") -> None:
     """Save *path_string* to a text file (used by the GUI)."""
     Path(file_name).write_text(path_string, encoding="utf-8")
     print(f"PATH variable saved to '{file_name}'.")
@@ -449,7 +445,9 @@ def save_path_to_file(
 # ---------------------------------------------------------------------------
 
 
-def clear_path(scope: str = "Machine", *, confirm: bool = False, dry_run: bool = False) -> None:
+def clear_path(
+    scope: str = "Machine", *, confirm: bool = False, dry_run: bool = False
+) -> None:
     """Set ``PATH`` to an empty string.
 
     .. warning::
@@ -476,7 +474,9 @@ def clear_path(scope: str = "Machine", *, confirm: bool = False, dry_run: bool =
     if dry_run:
         current: str = get_path(scope)
         print(f"[DRY RUN] Would clear PATH ({scope}):")
-        print(f"[DRY RUN]   Current: {current[:120]}{'...' if len(current) > 120 else ''}")
+        print(
+            f"[DRY RUN]   Current: {current[:120]}{'...' if len(current) > 120 else ''}"
+        )
         print("[DRY RUN] Would auto-backup current PATH first")
         print("[DRY RUN] No changes were made.")
         return
@@ -489,7 +489,8 @@ def clear_path(scope: str = "Machine", *, confirm: bool = False, dry_run: bool =
 
     if _IS_WINDOWS:
         command: list[str] = [
-            "powershell", "-Command",
+            "powershell",
+            "-Command",
             f"[System.Environment]::SetEnvironmentVariable('Path', '', '{scope}')",
         ]
         result: subprocess.CompletedProcess = subprocess.run(
@@ -509,7 +510,9 @@ def clear_path(scope: str = "Machine", *, confirm: bool = False, dry_run: bool =
 # ---------------------------------------------------------------------------
 
 
-def add_to_path(new_path: str, system_wide: bool = True, *, dry_run: bool = False) -> None:
+def add_to_path(
+    new_path: str, system_wide: bool = True, *, dry_run: bool = False
+) -> None:
     """Add one or more directories to ``PATH``.
 
     Duplicates are detected and skipped silently.
@@ -536,19 +539,13 @@ def add_to_path(new_path: str, system_wide: bool = True, *, dry_run: bool = Fals
     existing_entries: list[str] = [
         p.strip() for p in current_path.split(sep) if p.strip()
     ]
-    new_entries: list[str] = [
-        p.strip() for p in new_path.split(sep) if p.strip()
-    ]
+    new_entries: list[str] = [p.strip() for p in new_path.split(sep) if p.strip()]
 
     if not new_entries:
         raise ValueError("No valid paths to add.")
 
-    already_present: list[str] = [
-        e for e in new_entries if e in existing_entries
-    ]
-    entries_to_add: list[str] = [
-        e for e in new_entries if e not in existing_entries
-    ]
+    already_present: list[str] = [e for e in new_entries if e in existing_entries]
+    entries_to_add: list[str] = [e for e in new_entries if e not in existing_entries]
 
     if not entries_to_add:
         print(
@@ -564,7 +561,9 @@ def add_to_path(new_path: str, system_wide: bool = True, *, dry_run: bool = Fals
         for entry in entries_to_add:
             print(f"[DRY RUN]   + {entry}")
         print("[DRY RUN] Resulting PATH:")
-        print(f"[DRY RUN]   {updated_path[:200]}{'...' if len(updated_path) > 200 else ''}")
+        print(
+            f"[DRY RUN]   {updated_path[:200]}{'...' if len(updated_path) > 200 else ''}"
+        )
         print("[DRY RUN] No changes were made.")
         return
 
@@ -576,8 +575,7 @@ def add_to_path(new_path: str, system_wide: bool = True, *, dry_run: bool = Fals
     )
     if already_present:
         print(
-            f"The following path(s) were already present: "
-            f"{', '.join(already_present)}"
+            f"The following path(s) were already present: {', '.join(already_present)}"
         )
 
 
@@ -604,7 +602,9 @@ if __name__ == "__main__":
         print("[DRY RUN] == CLI dry-run mode — no changes will be made ==")
         print()
         print(f"[DRY RUN] Current PATH ({'Machine' if _IS_WINDOWS else 'session'}):")
-        print(f"[DRY RUN]   {full_path_string[:200]}{'...' if len(full_path_string) > 200 else ''}")
+        print(
+            f"[DRY RUN]   {full_path_string[:200]}{'...' if len(full_path_string) > 200 else ''}"
+        )
         print()
     else:
         # Write current PATH to file (only in real mode)

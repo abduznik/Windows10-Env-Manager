@@ -28,9 +28,7 @@ def _patch_path_list_file(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> No
     directory.  In tests we want it inside ``tmp_path`` so each test gets
     a clean slate and no real filesystem state is modified.
     """
-    monkeypatch.setattr(
-        gui_command, "_PATH_LIST_FILE", tmp_path / "path_list.txt"
-    )
+    monkeypatch.setattr(gui_command, "_PATH_LIST_FILE", tmp_path / "path_list.txt")
 
 
 @pytest.fixture
@@ -67,6 +65,7 @@ class TestRelativeToAssets:
         result = gui_command.relative_to_assets("button_1.png")
         # Use os.sep for cross-platform path matching (\ on Windows, / on macOS)
         import os
+
         expected_suffix = f"assets{os.sep}frame0{os.sep}button_1.png"
         assert str(result).endswith(expected_suffix)
 
@@ -91,9 +90,7 @@ class TestCreateNewDir:
         patch_cmd_path: dict[str, MagicMock],
     ) -> None:
         gui_command.create_new_dir()
-        patch_cmd_path["add_to_path"].assert_called_once_with(
-            "C:\\Users\\Test\\App"
-        )
+        patch_cmd_path["add_to_path"].assert_called_once_with("C:\\Users\\Test\\App")
 
     def test_shows_success_message(
         self,
@@ -378,12 +375,8 @@ class TestCreateScrollablePathList:
 
             gui_command.create_scrollable_path_list(MagicMock())
 
-            insert_calls = [
-                c for c in mock_listbox.mock_calls if c[0] == "insert"
-            ]
-            inserted_paths = [
-                str(c[1][1]) for c in insert_calls if len(c[1]) > 1
-            ]
+            insert_calls = [c for c in mock_listbox.mock_calls if c[0] == "insert"]
+            inserted_paths = [str(c[1][1]) for c in insert_calls if len(c[1]) > 1]
             assert "C:\\Windows" in inserted_paths
             assert "C:\\Program Files" in inserted_paths
 

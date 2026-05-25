@@ -69,6 +69,7 @@ canvas.create_rectangle(
 
 canvas.place(x=0, y=0)
 
+
 def _load_button_image(name: str) -> PhotoImage:
     """Load a button image, trying .png first (Windows Tk 8.6+), then .gif (macOS/Linux Tk 8.5)."""
     for ext in (".png", ".gif"):

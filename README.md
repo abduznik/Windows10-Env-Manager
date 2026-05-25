@@ -154,8 +154,9 @@ pip install ruff pytest          # development tools
 ### Run tests
 
 ```bash
-pytest -v        # 59+ tests covering all modules
+pytest -v        # 129+ tests covering all modules
 ruff check .     # linting — zero warnings
+ruff format --check .  # formatting check
 ```
 
 ### Project structure
@@ -227,9 +228,11 @@ manipulating the system `PATH` environment variable. It provides:
 
 ## Contributing
 
-Contributions are welcome! Please open an
-[issue](https://github.com/abduznik/Windows10-Env-Manager/issues) for bugs
-or feature requests, and submit a pull request for any improvements.
+Contributions are welcome! See [CONTRIBUTING.md](CONTRIBUTING.md) for
+setup instructions, testing guidelines, and how to find easy first issues.
+
+We maintain a list of **super-easy 1–3 line issues** tagged with
+`good first issue` — perfect for first-time contributors.
 
 ---
 

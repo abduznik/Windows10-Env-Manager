@@ -1,2 +1,6 @@
 __pycache__/
 path_list.txt
+path_backup.txt
+path_backup_*.json
+*.pyc
+.DS_Store

@@ -112,7 +112,9 @@ def mock_windll(monkeypatch: pytest.MonkeyPatch) -> None:
 
     mock_shell32 = MagicMock()
     mock_shell32.IsUserAnAdmin.return_value = True
-    monkeypatch.setattr(ctypes, "windll", MagicMock(shell32=mock_shell32), raising=False)
+    monkeypatch.setattr(
+        ctypes, "windll", MagicMock(shell32=mock_shell32), raising=False
+    )
 
 
 @pytest.fixture(autouse=True)
