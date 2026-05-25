@@ -7,6 +7,7 @@ wire up specific return values.
 Run with: pytest test_gui_command.py -v
 """
 
+import os
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -54,7 +55,9 @@ def patch_cmd_path(monkeypatch: pytest.MonkeyPatch) -> dict[str, MagicMock]:
 class TestRelativeToAssets:
     def test_returns_path_under_assets(self) -> None:
         result = gui_command.relative_to_assets("button_1.png")
-        assert str(result).endswith("assets/frame0/button_1.png")
+        # Use os.sep for cross-platform path matching (\ on Windows, / on macOS)
+        expected_suffix = f"assets{os.sep}frame0{os.sep}button_1.png"
+        assert str(result).endswith(expected_suffix)
 
 
 # ---------------------------------------------------------------------------
