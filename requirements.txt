@@ -1,0 +1,8 @@
+# Windows10-Env-Manager
+#
+# Runtime: tkinter is included with Python — no extra runtime deps needed.
+#
+# Development:
+ruff                        # linter
+pytest                      # test runner
+pyinstaller                 # building standalone executables
