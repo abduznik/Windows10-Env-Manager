@@ -92,15 +92,6 @@ def _parse_backup_timestamp(filename: str) -> str:
     return ts_raw
 
 
-def _backup_file_path() -> Path:
-    """Return the ``Path`` to the backup file in the app data directory.
-
-    .. deprecated::
-        Use versioned backups via ``backup_path()`` instead.
-    """
-    return _backup_dir() / f"{_BACKUP_PREFIX}.txt"
-
-
 def _backup_files() -> list[Path]:
     """Return sorted list of versioned backup file paths (newest first)."""
     bdir = _backup_dir()
